@@ -203,7 +203,7 @@ const HTML_TEMPLATE = `
   {{INFO_MESSAGE}}
   
   <div class="action-bar">
-    <button id="syncAllButton" class="btn" onclick="triggerSyncAll()">同步所有仓库</button>
+    <button id="syncAllButton" class="btn" onclick="window.triggerSyncAll()">同步所有仓库</button>
   </div>
   
   <div id="syncStatus" class="sync-status">
@@ -235,106 +235,108 @@ const HTML_TEMPLATE = `
   </div>
   
   <script>
-    function triggerSyncAll() {
-      const syncAllButton = document.getElementById('syncAllButton');
-      const syncStatus = document.getElementById('syncStatus');
-      const syncLog = document.getElementById('syncLog');
-      
-      syncAllButton.disabled = true;
-      syncStatus.style.display = 'flex';
-      syncLog.style.display = 'block';
-      syncLog.innerHTML = '开始同步所有仓库...\n';
-      
-      fetch('/api/sync-logs', { method: 'GET' })
-        .then(response => {
-          if (!response.ok) throw new Error('同步日志轮询失败');
-          return response.text();
-        })
-        .then(() => {
-          // 连接日志事件流
-          const evtSource = new EventSource('/api/sync-logs-stream');
-          
-          evtSource.onmessage = function(event) {
-            const logEntry = event.data;
-            syncLog.innerHTML += logEntry + '\n';
-            syncLog.scrollTop = syncLog.scrollHeight;
+    document.addEventListener('DOMContentLoaded', function() {
+      window.triggerSyncAll = function() {
+        const syncAllButton = document.getElementById('syncAllButton');
+        const syncStatus = document.getElementById('syncStatus');
+        const syncLog = document.getElementById('syncLog');
+        
+        syncAllButton.disabled = true;
+        syncStatus.style.display = 'flex';
+        syncLog.style.display = 'block';
+        syncLog.innerHTML = '开始同步所有仓库...\n';
+        
+        fetch('/api/sync-logs', { method: 'GET' })
+          .then(response => {
+            if (!response.ok) throw new Error('同步日志轮询失败');
+            return response.text();
+          })
+          .then(() => {
+            // 连接日志事件流
+            const evtSource = new EventSource('/api/sync-logs-stream');
             
-            // 检查是否同步完成
-            if (logEntry.includes('同步完成') || logEntry.includes('同步失败')) {
-              setTimeout(() => {
-                evtSource.close();
-                window.location.reload();
-              }, 3000);
-            }
-          };
-          
-          evtSource.onerror = function() {
-            evtSource.close();
-          };
-        })
-        .catch(error => {
-          syncStatus.innerHTML = \`<span style="color: #dc2626;">\${error.message}</span>\`;
-          syncAllButton.disabled = false;
-        });
-      
-      // 触发同步
-      fetch('/sync', { method: 'POST' })
-        .catch(error => {
-          syncStatus.innerHTML = \`<span style="color: #dc2626;">\${error.message}</span>\`;
-          syncAllButton.disabled = false;
-        });
-    }
-    
-    function triggerSyncRepo(repo) {
-      const repoRow = document.getElementById('repo-' + repo.replace('/', '-'));
-      const syncButton = document.getElementById('sync-' + repo.replace('/', '-'));
-      const syncRowStatus = document.getElementById('sync-status-' + repo.replace('/', '-'));
-      const syncLog = document.getElementById('syncLog');
-      
-      syncButton.disabled = true;
-      syncRowStatus.style.display = 'block';
-      syncLog.style.display = 'block';
-      syncLog.innerHTML = \`开始同步仓库: \${repo}...\n\`;
-      
-      fetch('/api/sync-logs', { method: 'GET' })
-        .then(response => {
-          if (!response.ok) throw new Error('同步日志轮询失败');
-          return response.text();
-        })
-        .then(() => {
-          // 连接日志事件流
-          const evtSource = new EventSource(\`/api/sync-logs-stream?repo=\${repo}\`);
-          
-          evtSource.onmessage = function(event) {
-            const logEntry = event.data;
-            syncLog.innerHTML += logEntry + '\n';
-            syncLog.scrollTop = syncLog.scrollHeight;
+            evtSource.onmessage = function(event) {
+              const logEntry = event.data;
+              syncLog.innerHTML += logEntry + '\n';
+              syncLog.scrollTop = syncLog.scrollHeight;
+              
+              // 检查是否同步完成
+              if (logEntry.includes('同步完成') || logEntry.includes('同步失败')) {
+                setTimeout(() => {
+                  evtSource.close();
+                  window.location.reload();
+                }, 3000);
+              }
+            };
             
-            // 检查是否同步完成
-            if (logEntry.includes('同步完成') || logEntry.includes('同步失败')) {
-              setTimeout(() => {
-                evtSource.close();
-                window.location.reload();
-              }, 3000);
-            }
-          };
-          
-          evtSource.onerror = function() {
-            evtSource.close();
-          };
-        })
-        .catch(error => {
-          syncRowStatus.innerHTML = \`<span style="color: #dc2626;">\${error.message}</span>\`;
-          syncButton.disabled = false;
-        });
+            evtSource.onerror = function() {
+              evtSource.close();
+            };
+          })
+          .catch(error => {
+            syncStatus.innerHTML = \`<span style="color: #dc2626;">\${error.message}</span>\`;
+            syncAllButton.disabled = false;
+          });
+        
+        // 触发同步
+        fetch('/sync', { method: 'POST' })
+          .catch(error => {
+            syncStatus.innerHTML = \`<span style="color: #dc2626;">\${error.message}</span>\`;
+            syncAllButton.disabled = false;
+          });
+      };
       
-      // 触发同步
-      fetch(\`/sync?repo=\${repo}\`, { method: 'POST' })
-        .catch(error => {
-          syncRowStatus.innerHTML = \`<span style="color: #dc2626;">\${error.message}</span>\`;
-          syncButton.disabled = false;
-        });
-    }
+      window.triggerSyncRepo = function(repo) {
+        const repoRow = document.getElementById('repo-' + repo.replace('/', '-'));
+        const syncButton = document.getElementById('sync-' + repo.replace('/', '-'));
+        const syncRowStatus = document.getElementById('sync-status-' + repo.replace('/', '-'));
+        const syncLog = document.getElementById('syncLog');
+        
+        syncButton.disabled = true;
+        syncRowStatus.style.display = 'block';
+        syncLog.style.display = 'block';
+        syncLog.innerHTML = \`开始同步仓库: \${repo}...\n\`;
+        
+        fetch('/api/sync-logs', { method: 'GET' })
+          .then(response => {
+            if (!response.ok) throw new Error('同步日志轮询失败');
+            return response.text();
+          })
+          .then(() => {
+            // 连接日志事件流
+            const evtSource = new EventSource(\`/api/sync-logs-stream?repo=\${repo}\`);
+            
+            evtSource.onmessage = function(event) {
+              const logEntry = event.data;
+              syncLog.innerHTML += logEntry + '\n';
+              syncLog.scrollTop = syncLog.scrollHeight;
+              
+              // 检查是否同步完成
+              if (logEntry.includes('同步完成') || logEntry.includes('同步失败')) {
+                setTimeout(() => {
+                  evtSource.close();
+                  window.location.reload();
+                }, 3000);
+              }
+            };
+            
+            evtSource.onerror = function() {
+              evtSource.close();
+            };
+          })
+          .catch(error => {
+            syncRowStatus.innerHTML = \`<span style="color: #dc2626;">\${error.message}</span>\`;
+            syncButton.disabled = false;
+          });
+        
+        // 触发同步
+        fetch(\`/sync?repo=\${repo}\`, { method: 'POST' })
+          .catch(error => {
+            syncRowStatus.innerHTML = \`<span style="color: #dc2626;">\${error.message}</span>\`;
+            syncButton.disabled = false;
+          });
+      };
+    });
   </script>
 </body>
 </html>
@@ -1009,11 +1011,16 @@ export default {
       const limit = headers.get('x-ratelimit-limit');
       const reset = headers.get('x-ratelimit-reset');
       
+      console.log("GitHub API Headers:", { remaining, limit, reset });
+      
       if (remaining && limit && reset) {
+        const resetTimestamp = parseInt(reset);
+        console.log("Reset timestamp:", resetTimestamp, "Date:", new Date(resetTimestamp * 1000).toISOString());
+        
         this.apiRateLimit = {
           remaining: parseInt(remaining),
           limit: parseInt(limit),
-          reset: new Date(parseInt(reset) * 1000)
+          reset: resetTimestamp
         };
       }
     } catch (error) {
@@ -1112,7 +1119,7 @@ export default {
             <td>${repo.path || "/"}</td>
             <td><span class="status ${statusClass}" title="${repo.message || ''}">${statusText}</span></td>
             <td>
-              <button id="sync-${repoId}" class="btn btn-sm" onclick="triggerSyncRepo('${repo.repo}')">同步</button>
+              <button id="sync-${repoId}" class="btn btn-sm" onclick="window.triggerSyncRepo('${repo.repo}')">同步</button>
               <div id="sync-status-${repoId}" class="sync-row-status">
                 <div class="spinner" style="width: 12px; height: 12px;"></div>
                 <span>同步中...</span>
@@ -1139,8 +1146,12 @@ export default {
     let apiRateLimitInfo = "GitHub API 速率: 未知";
     if (this.apiRateLimit) {
       try {
-        // 使用中国时区格式化API重置时间
-        const resetTime = new Date(this.apiRateLimit.reset * 1000).toLocaleString('zh-CN', {
+        // 确保重置时间是时间戳（秒）
+        const resetTimestamp = this.apiRateLimit.reset;
+        
+        // 正确格式化重置时间（使用中国时区）
+        const resetDate = new Date(resetTimestamp * 1000);
+        const resetTime = resetDate.toLocaleString('zh-CN', {
           year: 'numeric',
           month: 'numeric',
           day: 'numeric',
@@ -1150,9 +1161,11 @@ export default {
           hour12: false,
           timeZone: 'Asia/Shanghai'
         });
+        
         apiRateLimitInfo = `GitHub API 速率: <span class="api-count">${this.apiRateLimit.remaining}/${this.apiRateLimit.limit}</span> 次 (<span class="api-reset">重置时间: ${resetTime}</span>)`;
       } catch (e) {
-        console.error("API速率时间格式化错误:", e);
+        console.error("API速率时间格式化错误:", e, this.apiRateLimit);
+        apiRateLimitInfo = `GitHub API 速率: <span class="api-count">${this.apiRateLimit.remaining}/${this.apiRateLimit.limit}</span> 次 (重置时间: 格式化错误)`;
       }
     }
     
@@ -1191,6 +1204,7 @@ export default {
         document.addEventListener('DOMContentLoaded', function() {
           document.getElementById('syncAllButton').disabled = true;
           document.getElementById('syncStatus').style.display = 'flex';
+          document.getElementById('syncLog').style.display = 'block';
         });
       </script>`);
     }

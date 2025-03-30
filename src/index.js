@@ -259,8 +259,15 @@ const HTML_TEMPLATE = `
             syncLog.innerHTML += logEntry + '\\n';
             syncLog.scrollTop = syncLog.scrollHeight;
             
-            // 检查是否同步完成
-            if (logEntry.includes('同步完成') || logEntry.includes('同步失败')) {
+            // 检查是否同步完成或失败
+            if (logEntry.includes('同步任务结束') || 
+                logEntry.includes('同步完成') || 
+                logEntry.includes('同步失败') || 
+                logEntry.includes('强制结束')) {
+              
+              // 添加自动刷新倒计时
+              syncLog.innerHTML += '\\n同步已完成，3秒后自动刷新页面...\\n';
+              
               setTimeout(function() {
                 evtSource.close();
                 window.location.reload();
@@ -269,7 +276,13 @@ const HTML_TEMPLATE = `
           };
           
           evtSource.onerror = function() {
+            syncLog.innerHTML += '日志流连接中断，请刷新页面查看最新状态...\\n';
             evtSource.close();
+            
+            // 如果连接断开，5秒后自动刷新
+            setTimeout(function() {
+              window.location.reload();
+            }, 5000);
           };
         })
         .catch(function(error) {
@@ -310,8 +323,15 @@ const HTML_TEMPLATE = `
             syncLog.innerHTML += logEntry + '\\n';
             syncLog.scrollTop = syncLog.scrollHeight;
             
-            // 检查是否同步完成
-            if (logEntry.includes('同步完成') || logEntry.includes('同步失败')) {
+            // 检查是否同步完成或失败
+            if (logEntry.includes('同步任务结束') || 
+                logEntry.includes('同步完成') || 
+                logEntry.includes('同步失败') || 
+                logEntry.includes('强制结束')) {
+              
+              // 添加自动刷新倒计时
+              syncLog.innerHTML += '\\n同步已完成，3秒后自动刷新页面...\\n';
+              
               setTimeout(function() {
                 evtSource.close();
                 window.location.reload();
@@ -320,7 +340,13 @@ const HTML_TEMPLATE = `
           };
           
           evtSource.onerror = function() {
+            syncLog.innerHTML += '日志流连接中断，请刷新页面查看最新状态...\\n';
             evtSource.close();
+            
+            // 如果连接断开，5秒后自动刷新
+            setTimeout(function() {
+              window.location.reload();
+            }, 5000);
           };
         })
         .catch(function(error) {
@@ -335,6 +361,27 @@ const HTML_TEMPLATE = `
           syncButton.disabled = false;
         });
     }
+    
+    // 添加页面定时刷新功能，防止同步状态显示不更新
+    let pageIdleTime = 0;
+    const maxIdleTime = 60; // 60秒自动刷新一次
+    
+    // 每秒检查一次是否需要刷新页面
+    setInterval(function() {
+      // 如果页面显示正在同步，但实际上可能已经完成或超时
+      if (document.getElementById('syncStatus').style.display === 'flex') {
+        pageIdleTime++;
+        
+        // 超过最大空闲时间，自动刷新
+        if (pageIdleTime >= maxIdleTime) {
+          console.log('同步状态长时间未更新，自动刷新页面');
+          window.location.reload();
+        }
+      } else {
+        // 重置计时器
+        pageIdleTime = 0;
+      }
+    }, 1000);
   </script>
 </body>
 </html>`;
@@ -363,190 +410,63 @@ export default {
    */
   async fetch(request, env, ctx) {
     try {
-      // 检查 R2 绑定
-      const hasR2Binding = typeof env.R2_BUCKET !== 'undefined';
-      if (!hasR2Binding) {
-        this.errorMessage = "注意: R2 存储桶未绑定，请在 Workers 设置中绑定 R2_BUCKET。当前仅可查看状态，无法执行同步操作。";
-      } else {
-        // 清除任何之前的错误
-        this.errorMessage = null;
-      }
-      
-      // 获取当前 URL
       const url = new URL(request.url);
+      const pathname = url.pathname;
       
-      // 处理 favicon.svg 请求
-      if (url.pathname === "/favicon.svg") {
-        // 使用内联SVG直接提供favicon
-        const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="7 10 12 15 17 10"/>
-          <line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>`;
-        
-        return new Response(svgContent, {
-          headers: { 
-            "Content-Type": "image/svg+xml",
-            "Cache-Control": "public, max-age=86400"
-          }
-        });
-      }
+      // 添加一个变量来跟踪同步开始时间，用于超时处理
+      let syncStartTime = null;
       
-      // 处理同步日志流
-      if (url.pathname === "/api/sync-logs-stream") {
-        // 创建一个流式响应
-        const stream = new TransformStream();
-        const writer = stream.writable.getWriter();
-        
-        // 获取可能的仓库参数
-        const repoParam = url.searchParams.get('repo');
-        
-        // 设置环境变量来存储该流的writer，以便后续写入
-        env.LOG_WRITER = writer;
-        env.LOG_REPO = repoParam;
-        
-        // 返回EventSource兼容的响应
-        return new Response(stream.readable, {
-          headers: {
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive"
-          }
-        });
-      }
-      
-      // 处理同步日志API
-      if (url.pathname === "/api/sync-logs") {
-        // 返回一个简单的确认响应
-        return new Response("同步日志服务就绪", { status: 200 });
-      }
-      
-      // 如果请求路径是 /sync，触发同步任务
-      if (url.pathname === "/sync") {
-        if (!hasR2Binding) {
-          return new Response("错误: R2 存储桶未绑定，无法执行同步操作", { status: 400 });
+      // 处理API请求
+      if (pathname === "/sync") {
+        // 检查R2绑定
+        if (!env.R2_BUCKET) {
+          return new Response("未配置R2存储桶", { status: 500 });
         }
         
-        // 检查是否已经有正在进行的同步任务
-        if (this.isSyncing) {
-          return new Response("同步任务已在进行中，请稍后再试", { status: 409 });
-        }
+        // 处理同步任务
+        this.isSyncing = true; // 设置同步状态
+        syncStartTime = Date.now(); // 记录开始时间
         
-        // 获取可能的仓库参数
-        const repoParam = url.searchParams.get('repo');
-        
-        // 标记为正在同步
-        this.isSyncing = true;
-        
-        // 使用 ctx.waitUntil 允许同步在后台继续完成
-        ctx.waitUntil((async () => {
-          try {
-            await this.handleSync(env, repoParam);
-          } finally {
-            this.isSyncing = false;
-          }
-        })());
-        
-        return new Response("同步任务已触发", { status: 200 });
-      }
-      
-      // 如果请求路径是 /api/status，返回 JSON 格式的状态信息
-      if (url.pathname === "/api/status") {
-        return new Response(JSON.stringify({
-          repos: this.syncedRepos,
-          lastCheck: lastCheckTime ? new Date(lastCheckTime * 1000).toISOString() : null,
-          apiRateLimit: this.apiRateLimit,
-          error: this.errorMessage,
-          info: this.infoMessage,
-          isSyncing: this.isSyncing
-        }), {
-          headers: { "Content-Type": "application/json" },
-          status: 200
+        // 创建一个Promise，如果同步超过10分钟，则自动超时
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => {
+            reject(new Error('同步任务超时（10分钟限制）'));
+          }, 10 * 60 * 1000); // 10分钟超时
         });
-      }
-      
-      // 如果请求路径是 /api/github-rate，获取 GitHub API 速率限制信息
-      if (url.pathname === "/api/github-rate") {
-        await this.fetchGitHubRateLimit(env);
-        return new Response(JSON.stringify({
-          apiRateLimit: this.apiRateLimit
-        }), {
-          headers: { "Content-Type": "application/json" },
-          status: 200
-        });
-      }
-      
-      // 默认显示状态页面
-      // 如果还没有 API 速率限制信息，先获取一次
-      if (!this.apiRateLimit) {
-        await this.fetchGitHubRateLimit(env);
-      }
-      
-      // 如果还没有仓库信息，尝试获取配置的仓库并从KV中加载其状态
-      if (this.syncedRepos.length === 0 || this.syncedRepos.some(repo => repo.status === "pending")) {
+        
+        // 运行同步任务或返回超时错误
         try {
-          const repoConfigs = this.getRepoConfigs(env);
-          if (repoConfigs.length > 0) {
-            // 从KV加载存储的版本信息
-            const updatedRepos = [];
-            
-            for (const config of repoConfigs) {
-              try {
-                const repoKey = `repo:${config.repo}`;
-                const versionInfoJson = await env.SYNC_STATUS.get(repoKey);
-                
-                if (versionInfoJson) {
-                  // 已同步过，加载状态
-                  const versionInfo = JSON.parse(versionInfoJson);
-                  updatedRepos.push({
-                    repo: config.repo,
-                    version: versionInfo.version,
-                    date: versionInfo.updatedAt,
-                    path: config.path,
-                    status: "latest",
-                    message: "当前已是最新版本"
-                  });
-                } else {
-                  // 未同步过，创建临时记录
-                  updatedRepos.push({
-                    repo: config.repo,
-                    version: "未同步",
-                    date: "-",
-                    path: config.path,
-                    status: "pending",
-                    message: "尚未同步，点击\"同步仓库\"按钮开始同步"
-                  });
-                }
-              } catch (error) {
-                console.error(`加载仓库 ${config.repo} 状态信息失败:`, error);
-                // 如果读取失败，添加一个显示错误的条目
-                updatedRepos.push({
-                  repo: config.repo,
-                  version: "未知",
-                  date: "-",
-                  path: config.path,
-                  status: "error",
-                  message: `加载状态失败: ${error.message}`
-                });
-              }
-            }
-            
-            // 更新内存中的同步状态
-            this.syncedRepos = updatedRepos;
-          } else {
-            this.infoMessage = "未检测到有效的仓库配置，请确认已添加 REPO_1、REPO_2 等环境变量";
-          }
+          // 创建同步任务Promise和超时Promise的竞争
+          const syncPromise = this.handleSync(request, env, ctx);
+          return await Promise.race([syncPromise, timeoutPromise]);
         } catch (error) {
-          console.error("加载仓库状态时出错:", error);
-          this.errorMessage = `加载仓库状态时出错: ${error.message}`;
+          console.error("同步过程出错:", error);
+          
+          // 更新同步状态为错误
+          const repoConfigs = this.getConfiguredRepos(env);
+          for (const config of repoConfigs) {
+            await this.saveVersionInfo(env, config.repo, {
+              repo: config.repo,
+              status: 'error',
+              error: error.message,
+              lastUpdate: new Date().toISOString(),
+              path: config.path
+            });
+          }
+          
+          return new Response(`同步失败: ${error.message}`, { status: 500 });
+        } finally {
+          this.isSyncing = false; // 无论如何都重置同步状态
         }
       }
       
-      return this.generateStatusPage();
+      // 其他路由处理逻辑...
+      
+      // 默认情况下，返回主页面
+      return this.handleHome(env);
     } catch (error) {
       console.error("处理请求时出错:", error);
-      this.errorMessage = `错误: ${error.message}`;
-      return this.generateStatusPage();
+      return new Response("服务器错误", { status: 500 });
     }
   },
 
@@ -644,21 +564,21 @@ export default {
           await this.sendLogMessage(`${logPrefix} 最新版本: ${tag_name}, 发布于: ${published_at}`, env);
           console.log(`最新版本: ${tag_name}, 发布于: ${published_at}`);
           
-          // 获取当前 R2 存储桶中的文件，检查是否需要更新
-          await this.sendLogMessage(`${logPrefix} 检查是否需要更新...`, env);
-          const needUpdate = await this.checkNeedUpdate(config.repo, tag_name, config.path, env);
-          
           // 更新同步信息数组中的对应条目
           const repoIndex = newSyncedRepos.findIndex(r => r.repo === config.repo);
           processedRepos.add(config.repo);
+          
+          // 检查是否需要更新（先检查再删除）
+          await this.sendLogMessage(`${logPrefix} 检查是否需要更新...`, env);
+          const needUpdate = await this.checkNeedUpdate(env, config.repo, tag_name, config.path);
           
           if (needUpdate) {
             await this.sendLogMessage(`${logPrefix} 需要更新到新版本: ${tag_name}`, env);
             console.log(`需要更新到新版本: ${tag_name}`);
             
-            // 删除旧文件
+            // 仅删除此仓库的旧文件
             await this.sendLogMessage(`${logPrefix} 删除旧文件...`, env);
-            await this.deleteOldFiles(config.repo, config.path, env);
+            await this.deleteRepoFiles(env, config.repo);
             
             // 下载并上传新文件
             const validAssets = assets.filter(asset => {
@@ -701,7 +621,12 @@ export default {
             await this.sendLogMessage(`${logPrefix} 上传完成，共 ${validAssets.length} 个文件 (${platformSummary})`, env);
             
             // 记录版本信息
-            await this.saveVersionInfo(config.repo, tag_name, config.path, env);
+            await this.saveVersionInfo(env, config.repo, {
+              repo: config.repo,
+              version: tag_name,
+              updatedAt: published_at,
+              path: config.path
+            });
             
             // 记录同步结果
             if (repoIndex >= 0) {
@@ -853,58 +778,71 @@ export default {
   /**
    * 检查是否需要更新
    */
-  async checkNeedUpdate(repo, currentVersion, path, env) {
+  async checkNeedUpdate(env, repo, currentVersion, path) {
     try {
-      // 首先从KV获取版本信息
-      const repoKey = `repo:${repo}`;
-      const versionInfoJson = await env.SYNC_STATUS.get(repoKey);
-      
-      if (versionInfoJson) {
-        // 如果有版本信息，比较版本
-        const versionInfo = JSON.parse(versionInfoJson);
-        if (versionInfo.version === currentVersion) {
-          // 版本相同，无需更新
-          console.log(`KV中版本相同，无需更新: ${currentVersion}`);
-          return false;
-        }
-        console.log(`KV中发现旧版本: ${versionInfo.version}，需要更新到: ${currentVersion}`);
-      } else {
-        // 如果KV中没有版本信息，尝试从R2获取（向后兼容）
-        console.log(`KV中没有版本信息，检查R2存储`);
-        const versionKey = this.getVersionKey(repo, path);
-        const versionObj = await env.R2_BUCKET.get(versionKey);
+      // 首先检查KV中是否有版本信息
+      if (env.SYNC_STATUS) {
+        const key = `repo:${repo}`;
+        const storedVersionInfoStr = await env.SYNC_STATUS.get(key);
         
-        if (versionObj) {
-          const versionInfo = await versionObj.json();
-          if (versionInfo.version === currentVersion) {
-            // 从R2找到了版本信息且版本相同，无需更新
-            // 但是我们会将信息复制到KV以便未来使用
-            await env.SYNC_STATUS.put(repoKey, JSON.stringify(versionInfo));
-            console.log(`R2中版本相同，已同步到KV: ${currentVersion}`);
+        if (storedVersionInfoStr) {
+          const storedVersionInfo = JSON.parse(storedVersionInfoStr);
+          console.log(`KV中 ${repo} 的版本信息: ${storedVersionInfoStr}`);
+          
+          // 如果KV中已有版本信息，直接比较版本
+          if (storedVersionInfo.version === currentVersion) {
+            console.log(`${repo} 的版本 ${currentVersion} 已经是最新的，无需更新`);
             return false;
           }
+          
+          console.log(`${repo} 需要从版本 ${storedVersionInfo.version} 更新到 ${currentVersion}`);
+          return true;
+        }
+        
+        console.log(`KV中未找到 ${repo} 的版本信息，将进行首次同步`);
+        return true; // 首次同步
+      }
+      
+      // 如果KV未绑定，尝试从R2中获取版本信息（兼容旧版本）
+      if (env.R2_BUCKET) {
+        try {
+          const versionKey = this.getVersionKey(repo, path);
+          const versionObj = await env.R2_BUCKET.get(versionKey);
+          
+          if (versionObj) {
+            const versionInfo = await versionObj.json();
+            console.log(`R2中 ${repo} 的版本信息: ${JSON.stringify(versionInfo)}`);
+            
+            if (versionInfo.version === currentVersion) {
+              console.log(`${repo} 的版本 ${currentVersion} 已经是最新的，无需更新`);
+              return false;
+            }
+            
+            console.log(`${repo} 需要从版本 ${versionInfo.version} 更新到 ${currentVersion}`);
+            return true;
+          }
+        } catch (error) {
+          console.error(`从R2获取版本信息失败: ${error.message}`);
         }
       }
       
-      // 如果未找到版本信息或版本不同，需要更新
+      // 如果都没有找到版本信息，则进行首次同步
+      console.log(`未找到 ${repo} 的版本信息，将进行首次同步`);
       return true;
     } catch (error) {
-      console.error("检查更新时出错:", error);
-      // 出错时，我们假设需要更新
-      return true;
+      console.error(`检查更新失败: ${error.message}`);
+      return true; // 出错时默认执行更新
     }
   },
 
   /**
-   * 获取版本信息的键名
+   * 获取版本信息的键值
    */
   getVersionKey(repo, path) {
     const repoId = repo.replace(/\//g, "-");
-    let storagePath = path.startsWith("/") ? path.slice(1) : path;
-    if (storagePath && !storagePath.endsWith("/")) {
-      storagePath += "/";
-    }
-    return `${storagePath}${repoId}-version.json`;
+    const prefix = path && path.startsWith("/") ? path.substring(1) : path;
+    const basePath = prefix ? `${prefix}/` : "";
+    return `${basePath}${repoId}-version.json`;
   },
 
   /**
@@ -1042,39 +980,21 @@ export default {
   },
 
   /**
-   * 保存版本信息
+   * 保存版本信息到KV存储
    */
-  async saveVersionInfo(repo, version, path, env) {
+  async saveVersionInfo(env, repo, versionInfo) {
     try {
-      // 构建版本信息 JSON
-      const versionInfo = {
-        repo: repo,
-        version: version,
-        updatedAt: new Date().toISOString(),
-        path: path
-      };
-      
-      // 将版本信息保存到 KV
-      const repoKey = `repo:${repo}`;
-      await env.SYNC_STATUS.put(repoKey, JSON.stringify(versionInfo));
-      
-      // 我们仍然保留原来的R2存储，用于存储实际文件
-      // 但是同步状态信息现在存储在KV中
-      const repoId = repo.replace(/\//g, "-");
-      let storagePath = path.startsWith("/") ? path.slice(1) : path;
-      if (storagePath && !storagePath.endsWith("/")) {
-        storagePath += "/";
+      if (!env.SYNC_STATUS) {
+        console.error('KV存储未绑定，无法保存版本信息');
+        return;
       }
-      const versionKey = `${storagePath}${repoId}-version.json`;
       
-      await env.R2_BUCKET.put(versionKey, JSON.stringify(versionInfo), {
-        contentType: "application/json"
-      });
-      
-      console.log(`版本信息已保存到 KV: ${repoKey}`);
+      // 使用repo作为键前缀，确保不同仓库的数据互不干扰
+      const key = `repo:${repo}`;
+      await env.SYNC_STATUS.put(key, JSON.stringify(versionInfo));
+      console.log(`已保存 ${repo} 的版本信息到KV: ${JSON.stringify(versionInfo)}`);
     } catch (error) {
-      console.error("保存版本信息时出错:", error);
-      throw error;
+      console.error(`保存版本信息到KV失败: ${error.message}`);
     }
   },
 
@@ -1309,5 +1229,70 @@ export default {
     } catch (error) {
       console.error("发送日志消息失败:", error);
     }
+  },
+
+  /**
+   * 删除特定仓库的旧文件
+   */
+  async deleteRepoFiles(env, repo) {
+    try {
+      const bucket = env.R2_BUCKET;
+      if (!bucket) {
+        console.log(`删除文件失败: 未找到R2存储桶`);
+        return;
+      }
+
+      let objects;
+      try {
+        objects = await bucket.list();
+      } catch (error) {
+        console.error(`列出R2对象失败: ${error.message}`);
+        return;
+      }
+      
+      if (!objects || !objects.objects) {
+        console.log(`R2存储桶为空或返回格式异常`);
+        return;
+      }
+
+      let deletedCount = 0;
+      for (const object of objects.objects) {
+        // 只删除属于当前仓库的文件
+        if (this.isFileFromRepo(object.key, repo)) {
+          try {
+            await bucket.delete(object.key);
+            console.log(`已删除文件: ${object.key}`);
+            deletedCount++;
+          } catch (error) {
+            console.error(`删除文件 ${object.key} 失败: ${error.message}`);
+          }
+        }
+      }
+      console.log(`总共删除了 ${deletedCount} 个属于仓库 ${repo} 的文件`);
+    } catch (error) {
+      console.error("删除旧文件时出错:", error);
+      throw new Error(`删除旧文件时出错: ${error.message}`);
+    }
+  },
+  
+  /**
+   * 检查文件是否属于特定仓库
+   */
+  isFileFromRepo(key, repo) {
+    const repoName = repo.split('/')[1]; // 从repo格式 "owner/name" 中提取name部分
+    // 检查文件名是否包含仓库名称
+    // 对于v2rayN和v2rayNG等相似名称，我们需要更精确的匹配
+    // 使用文件路径中的目录结构或文件命名模式来区分
+    if (key.includes(`/${repoName}/`) || key.includes(`${repoName}-`)) {
+      // 对于相似名称的特殊处理
+      if (repoName === 'v2rayN' && key.includes('v2rayNG')) {
+        return false; // 如果是v2rayN仓库，但路径中包含v2rayNG，则不属于此仓库
+      }
+      if (repoName === 'v2rayNG' && !key.includes('v2rayNG')) {
+        return false; // 如果是v2rayNG仓库，但路径中不包含v2rayNG，则不属于此仓库
+      }
+      return true;
+    }
+    return false;
   }
 }; 

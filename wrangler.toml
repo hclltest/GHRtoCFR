@@ -1,4 +1,4 @@
-name = "ghrtocfr"
+name = "ghrtocfr-test"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
 

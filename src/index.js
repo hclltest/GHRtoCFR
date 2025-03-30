@@ -78,6 +78,24 @@ const HTML_TEMPLATE = `
       font-size: 0.9rem;
       color: #666;
     }
+    .api-info {
+      text-align: center;
+      margin-top: 10px;
+      font-size: 0.9rem;
+      color: #666;
+      padding: 8px 16px;
+      background-color: #f8fafc;
+      border-radius: 6px;
+      display: inline-block;
+      margin: 15px auto;
+    }
+    .api-count {
+      font-weight: 600;
+      color: #2563eb;
+    }
+    .api-reset {
+      font-style: italic;
+    }
     @media (max-width: 768px) {
       table {
         display: block;
@@ -103,6 +121,7 @@ const HTML_TEMPLATE = `
     </tbody>
   </table>
   <div class="last-check">最后检查时间: {{LAST_CHECK_TIME}}</div>
+  <div class="api-info">{{API_RATE_LIMIT}}</div>
 </body>
 </html>
 `;
@@ -113,6 +132,9 @@ const HTML_TEMPLATE = `
 export default {
   // 存储已经同步的仓库信息
   syncedRepos: [],
+  
+  // 存储 API 速率限制信息
+  apiRateLimit: null,
 
   /**
    * 处理 HTTP 请求
@@ -131,7 +153,19 @@ export default {
     if (url.pathname === "/api/status") {
       return new Response(JSON.stringify({
         repos: this.syncedRepos,
-        lastCheck: new Date(lastCheckTime * 1000).toISOString()
+        lastCheck: new Date(lastCheckTime * 1000).toISOString(),
+        apiRateLimit: this.apiRateLimit
+      }), {
+        headers: { "Content-Type": "application/json" },
+        status: 200
+      });
+    }
+    
+    // 如果请求路径是 /api/github-rate，获取 GitHub API 速率限制信息
+    if (url.pathname === "/api/github-rate") {
+      await this.fetchGitHubRateLimit(env);
+      return new Response(JSON.stringify({
+        apiRateLimit: this.apiRateLimit
       }), {
         headers: { "Content-Type": "application/json" },
         status: 200
@@ -139,6 +173,10 @@ export default {
     }
     
     // 默认显示状态页面
+    // 如果还没有 API 速率限制信息，先获取一次
+    if (!this.apiRateLimit) {
+      await this.fetchGitHubRateLimit(env);
+    }
     return this.generateStatusPage();
   },
 
@@ -218,7 +256,7 @@ export default {
     console.log(`正在处理仓库: ${repo}`);
     
     // 获取最新版本信息
-    const releaseInfo = await this.fetchLatestRelease(repo);
+    const releaseInfo = await this.fetchLatestRelease(repo, env);
     if (!releaseInfo) {
       throw new Error("无法获取最新版本信息");
     }
@@ -257,15 +295,23 @@ export default {
   /**
    * 获取仓库的最新 Release 信息
    */
-  async fetchLatestRelease(repo) {
+  async fetchLatestRelease(repo, env) {
     const apiUrl = `https://api.github.com/repos/${repo}/releases/latest`;
     
-    const response = await fetch(apiUrl, {
-      headers: {
-        "User-Agent": "GHRtoCFR-Worker",
-        "Accept": "application/vnd.github.v3+json"
-      }
-    });
+    const headers = {
+      "User-Agent": "GHRtoCFR-Worker",
+      "Accept": "application/vnd.github.v3+json"
+    };
+    
+    // 如果配置了 GitHub Token，添加到请求头中
+    if (env.GITHUB_TOKEN) {
+      headers["Authorization"] = `token ${env.GITHUB_TOKEN}`;
+    }
+    
+    const response = await fetch(apiUrl, { headers });
+    
+    // 保存 API 速率限制信息
+    this.saveRateLimitInfo(response.headers);
     
     if (!response.ok) {
       throw new Error(`获取 GitHub Release 失败: ${response.status} ${response.statusText}`);
@@ -449,6 +495,54 @@ export default {
   },
 
   /**
+   * 保存 API 速率限制信息
+   */
+  saveRateLimitInfo(headers) {
+    const remaining = headers.get('x-ratelimit-remaining');
+    const limit = headers.get('x-ratelimit-limit');
+    const reset = headers.get('x-ratelimit-reset');
+    
+    if (remaining && limit && reset) {
+      this.apiRateLimit = {
+        remaining: parseInt(remaining),
+        limit: parseInt(limit),
+        reset: new Date(parseInt(reset) * 1000)
+      };
+    }
+  },
+
+  /**
+   * 获取 GitHub API 速率限制信息
+   */
+  async fetchGitHubRateLimit(env) {
+    const apiUrl = "https://api.github.com/rate_limit";
+    
+    const headers = {
+      "User-Agent": "GHRtoCFR-Worker",
+      "Accept": "application/vnd.github.v3+json"
+    };
+    
+    // 如果配置了 GitHub Token，添加到请求头中
+    if (env.GITHUB_TOKEN) {
+      headers["Authorization"] = `token ${env.GITHUB_TOKEN}`;
+    }
+    
+    try {
+      const response = await fetch(apiUrl, { headers });
+      this.saveRateLimitInfo(response.headers);
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log("GitHub API 速率限制信息:", data.rate);
+      } else {
+        console.error("获取 GitHub API 速率限制失败:", response.status, response.statusText);
+      }
+    } catch (error) {
+      console.error("获取 GitHub API 速率限制出错:", error);
+    }
+  },
+
+  /**
    * 生成状态页面
    */
   async generateStatusPage() {
@@ -487,10 +581,18 @@ export default {
       }
     }
     
+    // 添加 API 速率限制信息
+    let apiRateLimitInfo = "GitHub API 速率: 未知";
+    if (this.apiRateLimit) {
+      const resetTime = this.apiRateLimit.reset.toLocaleString();
+      apiRateLimitInfo = `GitHub API 速率: <span class="api-count">${this.apiRateLimit.remaining}/${this.apiRateLimit.limit}</span> 次 (<span class="api-reset">重置时间: ${resetTime}</span>)`;
+    }
+    
     // 替换模板中的占位符
     let html = HTML_TEMPLATE
       .replace("{{TABLE_ROWS}}", tableRows)
-      .replace("{{LAST_CHECK_TIME}}", lastCheckTime ? new Date(lastCheckTime * 1000).toLocaleString() : "未检查");
+      .replace("{{LAST_CHECK_TIME}}", lastCheckTime ? new Date(lastCheckTime * 1000).toLocaleString() : "未检查")
+      .replace("{{API_RATE_LIMIT}}", apiRateLimitInfo);
     
     return new Response(html, {
       headers: { "Content-Type": "text/html; charset=utf-8" }

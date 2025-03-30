@@ -85,12 +85,41 @@ GHRtoCFR 是一个 Cloudflare Workers 项目，可以自动监控 GitHub 仓库�
    - 如果配置正确，你将看到一个状态页面显示正在监控的仓库
    - 要手动触发同步，访问 `/sync` 路径（例如 `https://ghrtocfr.your-account.workers.dev/sync`）
 
+## API 接口
+
+Worker 提供以下 API 端点：
+
+| 端点 | 描述 |
+|------|------|
+| `/` | 默认状态页面，显示监控的仓库和同步状态 |
+| `/sync` | 手动触发同步操作 |
+| `/api/status` | 获取 JSON 格式的同步状态信息 |
+| `/api/github-rate` | 获取 GitHub API 速率限制信息 |
+
 ## 环境变量详解
 
 | 变量名 | 描述 | 示例 |
 |--------|------|------|
 | `REPO_x` | 监控的仓库配置 (x 为数字编号) | `2dust/v2rayN:/apps/v2ray` |
 | `CHECK_INTERVAL` | 检查更新的间隔时间（秒）| `86400` (1天) |
+| `GITHUB_TOKEN` | GitHub 个人访问令牌，用于提高 API 请求限制 | `ghp_xxxxxxxxxxxx` |
+
+### GitHub Token 说明
+
+未使用 GitHub Token 的情况下，GitHub API 对匿名请求的限制为每小时 60 次。当您监控多个仓库或频繁检查更新时，可能会超出此限制。
+
+配置 GitHub Token 可以将此限制提高到每小时 5000 次，大大降低被限制的可能性。
+
+如何获取 GitHub Token:
+1. 登录 GitHub 账号
+2. 点击右上角头像 → Settings → Developer settings → Personal access tokens → Tokens (classic)
+3. 点击 "Generate new token" → "Generate new token (classic)"
+4. 为令牌起一个名称，例如 "GHRtoCFR"
+5. 选择 `public_repo` 权限（如果只需读取公开仓库的发布）
+6. 点击 "Generate token"，复制生成的令牌
+7. 在 Cloudflare Workers 的环境变量中添加 `GITHUB_TOKEN`，值为刚才复制的令牌
+
+**安全提示**: GitHub Token 具有访问您 GitHub 账户的权限，请妥善保管，不要分享给他人。
 
 ### 触发器与检查间隔说明
 

@@ -1,0 +1,17 @@
+{
+  "name": "ghrtocfr",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["cloudflare", "workers", "github", "r2"],
+  "author": "",
+  "license": "ISC",
+  "description": "从 GitHub Releases 同步文件到 Cloudflare R2 存储桶",
+  "devDependencies": {
+    "wrangler": "^4.6.0"
+  }
+}

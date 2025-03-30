@@ -15,6 +15,7 @@ const HTML_TEMPLATE = `
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>GHRtoCFR - GitHub Releases to Cloudflare R2</title>
   <style>
     body {
@@ -276,6 +277,23 @@ export default {
       
       // 获取当前 URL
       const url = new URL(request.url);
+      
+      // 处理 favicon.svg 请求
+      if (url.pathname === "/favicon.svg") {
+        // 使用内联SVG直接提供favicon
+        const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>`;
+        
+        return new Response(svgContent, {
+          headers: { 
+            "Content-Type": "image/svg+xml",
+            "Cache-Control": "public, max-age=86400"
+          }
+        });
+      }
       
       // 如果请求路径是 /sync，触发同步任务
       if (url.pathname === "/sync") {

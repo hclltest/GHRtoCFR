@@ -3,7 +3,10 @@ main = "src/index.js"
 compatibility_date = "2025-01-01"
 
 [triggers]
-crons = ["0 0 * * *"] # 每天触发一次，但实际执行频率由环境变量控制
+crons = ["0 0 * * *"]
 
 [[r2_buckets]]
 binding = "R2_BUCKET"
+
+[observability.logs]
+enabled = true

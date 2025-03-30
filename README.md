@@ -1,10 +1,6 @@
-# GHRtoCFR (GitHub Releases to Cloudflare R2)
+# GHRtoCFR
 
-GHRtoCFR 是一个 Cloudflare Workers 项目，可以自动监控 GitHub 仓库的 Releases 并将文件同步到 Cloudflare R2 存储桶中。
-
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/hcllmsx/GHRtoCFR)
-
-> 注意：在使用一键部署按钮前，请先将上面的链接中的 `YOUR_USERNAME` 替换为您的 GitHub 用户名。
+GHRtoCFR (GitHub Releases to Cloudflare R2) 是一个 Cloudflare Workers 项目，可以自动监控 GitHub 仓库的 Releases 并将文件同步到 Cloudflare R2 存储桶中。
 
 ## 功能特点
 
@@ -16,16 +12,6 @@ GHRtoCFR 是一个 Cloudflare Workers 项目，可以自动监控 GitHub 仓库�
 - ✅ 美观的状态页面，显示监控的仓库和同步状态
 
 ## 在线部署教程
-
-### 一键部署
-
-点击上方的 "Deploy to Cloudflare Workers" 按钮，按照提示授权并部署。部署成功后，您仍然需要：
-
-1. **创建并绑定 R2 存储桶**
-   - 按照下方"手动部署"的第 1 步和第 3 步操作
-
-2. **配置环境变量和触发器**
-   - 按照下方"手动部署"的第 4 步和第 5 步操作
 
 ### 手动部署
 
@@ -165,14 +151,6 @@ Worker 配置的 Cron 触发器（默认为每分钟执行一次）与 `CHECK_IN
    ```
    CHECK_INTERVAL=259200
    ```
-
-## 本地开发
-
-1. 克隆项目
-2. 安装依赖：`npm install`
-3. 修改 `wrangler.toml` 文件中的配置
-4. 本地开发：`npm run dev`
-5. 部署：`npm run deploy`
 
 ## 许可证
 

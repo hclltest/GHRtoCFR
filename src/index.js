@@ -72,6 +72,14 @@ const HTML_TEMPLATE = `
       background-color: #fee2e2;
       color: #dc2626;
     }
+    .error-message {
+      background-color: #fee2e2;
+      color: #dc2626;
+      padding: 15px;
+      border-radius: 8px;
+      margin: 20px 0;
+      text-align: center;
+    }
     .last-check {
       text-align: center;
       margin-top: 30px;
@@ -106,6 +114,7 @@ const HTML_TEMPLATE = `
 </head>
 <body>
   <h1>GitHub Releases to Cloudflare R2</h1>
+  {{ERROR_MESSAGE}}
   <table>
     <thead>
       <tr>
@@ -135,62 +144,92 @@ export default {
   
   // 存储 API 速率限制信息
   apiRateLimit: null,
+  
+  // 存储错误信息
+  errorMessage: null,
 
   /**
    * 处理 HTTP 请求
    */
   async fetch(request, env, ctx) {
-    // 获取当前 URL
-    const url = new URL(request.url);
-    
-    // 如果请求路径是 /sync，触发同步任务
-    if (url.pathname === "/sync") {
-      await this.handleSync(env);
-      return new Response("同步任务已触发", { status: 200 });
+    try {
+      // 检查 R2 绑定
+      if (!env.R2_BUCKET) {
+        this.errorMessage = "错误: R2 存储桶未绑定，请在 Workers 设置中绑定 R2_BUCKET";
+        return this.generateStatusPage();
+      }
+      
+      // 获取当前 URL
+      const url = new URL(request.url);
+      
+      // 如果请求路径是 /sync，触发同步任务
+      if (url.pathname === "/sync") {
+        await this.handleSync(env);
+        return new Response("同步任务已触发", { status: 200 });
+      }
+      
+      // 如果请求路径是 /api/status，返回 JSON 格式的状态信息
+      if (url.pathname === "/api/status") {
+        return new Response(JSON.stringify({
+          repos: this.syncedRepos,
+          lastCheck: lastCheckTime ? new Date(lastCheckTime * 1000).toISOString() : null,
+          apiRateLimit: this.apiRateLimit,
+          error: this.errorMessage
+        }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200
+        });
+      }
+      
+      // 如果请求路径是 /api/github-rate，获取 GitHub API 速率限制信息
+      if (url.pathname === "/api/github-rate") {
+        await this.fetchGitHubRateLimit(env);
+        return new Response(JSON.stringify({
+          apiRateLimit: this.apiRateLimit
+        }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200
+        });
+      }
+      
+      // 默认显示状态页面
+      // 如果还没有 API 速率限制信息，先获取一次
+      if (!this.apiRateLimit) {
+        await this.fetchGitHubRateLimit(env);
+      }
+      
+      // 清除任何之前的错误
+      this.errorMessage = null;
+      
+      return this.generateStatusPage();
+    } catch (error) {
+      console.error("处理请求时出错:", error);
+      this.errorMessage = `错误: ${error.message}`;
+      return this.generateStatusPage();
     }
-    
-    // 如果请求路径是 /api/status，返回 JSON 格式的状态信息
-    if (url.pathname === "/api/status") {
-      return new Response(JSON.stringify({
-        repos: this.syncedRepos,
-        lastCheck: new Date(lastCheckTime * 1000).toISOString(),
-        apiRateLimit: this.apiRateLimit
-      }), {
-        headers: { "Content-Type": "application/json" },
-        status: 200
-      });
-    }
-    
-    // 如果请求路径是 /api/github-rate，获取 GitHub API 速率限制信息
-    if (url.pathname === "/api/github-rate") {
-      await this.fetchGitHubRateLimit(env);
-      return new Response(JSON.stringify({
-        apiRateLimit: this.apiRateLimit
-      }), {
-        headers: { "Content-Type": "application/json" },
-        status: 200
-      });
-    }
-    
-    // 默认显示状态页面
-    // 如果还没有 API 速率限制信息，先获取一次
-    if (!this.apiRateLimit) {
-      await this.fetchGitHubRateLimit(env);
-    }
-    return this.generateStatusPage();
   },
 
   /**
    * 处理定时任务触发
    */
   async scheduled(event, env, ctx) {
-    const now = Math.floor(Date.now() / 1000);
-    const checkInterval = parseInt(env.CHECK_INTERVAL || DEFAULT_CHECK_INTERVAL);
-    
-    // 检查是否到达检查间隔
-    if (now - lastCheckTime >= checkInterval) {
-      await this.handleSync(env);
-      lastCheckTime = now;
+    try {
+      // 检查 R2 绑定
+      if (!env.R2_BUCKET) {
+        console.error("R2 存储桶未绑定");
+        return;
+      }
+      
+      const now = Math.floor(Date.now() / 1000);
+      const checkInterval = parseInt(env.CHECK_INTERVAL || DEFAULT_CHECK_INTERVAL);
+      
+      // 检查是否到达检查间隔
+      if (now - lastCheckTime >= checkInterval) {
+        await this.handleSync(env);
+        lastCheckTime = now;
+      }
+    } catch (error) {
+      console.error("定时任务执行出错:", error);
     }
   },
 
@@ -198,29 +237,39 @@ export default {
    * 处理同步任务
    */
   async handleSync(env) {
-    // 清除之前的同步信息
-    this.syncedRepos = [];
-    
-    // 获取所有配置的仓库信息
-    const repoConfigs = this.getRepoConfigs(env);
-    
-    // 处理每个仓库
-    for (const config of repoConfigs) {
-      try {
-        await this.processRepo(config, env);
-      } catch (error) {
-        console.error(`处理仓库 ${config.repo} 时出错:`, error);
-        
-        // 记录错误信息
-        this.syncedRepos.push({
-          repo: config.repo,
-          version: "未知",
-          date: new Date().toISOString(),
-          path: config.path,
-          status: "error",
-          error: error.message
-        });
+    try {
+      // 清除之前的同步信息
+      this.syncedRepos = [];
+      this.errorMessage = null;
+      
+      // 检查是否有配置仓库
+      const repoConfigs = this.getRepoConfigs(env);
+      if (repoConfigs.length === 0) {
+        this.errorMessage = "未配置任何仓库，请添加 REPO_x 环境变量";
+        return;
       }
+      
+      // 处理每个仓库
+      for (const config of repoConfigs) {
+        try {
+          await this.processRepo(config, env);
+        } catch (error) {
+          console.error(`处理仓库 ${config.repo} 时出错:`, error);
+          
+          // 记录错误信息
+          this.syncedRepos.push({
+            repo: config.repo,
+            version: "未知",
+            date: new Date().toISOString(),
+            path: config.path,
+            status: "error",
+            error: error.message
+          });
+        }
+      }
+    } catch (error) {
+      console.error("同步任务执行出错:", error);
+      this.errorMessage = `同步任务执行出错: ${error.message}`;
     }
   },
 
@@ -230,18 +279,24 @@ export default {
   getRepoConfigs(env) {
     const configs = [];
     
-    // 遍历所有环境变量，查找仓库配置
-    for (const key in env) {
-      if (key.startsWith("REPO_")) {
-        const value = env[key];
-        
-        // 解析配置格式: 用户名/仓库名:存储路径
-        const [repo, path = ""] = value.split(":");
-        
-        if (repo) {
-          configs.push({ repo, path });
+    try {
+      // 遍历所有环境变量，查找仓库配置
+      for (const key in env) {
+        if (key.startsWith("REPO_")) {
+          const value = env[key];
+          
+          // 解析配置格式: 用户名/仓库名:存储路径
+          const parts = value.split(":");
+          const repo = parts[0];
+          const path = parts.length > 1 ? parts.slice(1).join(":") : "";
+          
+          if (repo) {
+            configs.push({ repo, path });
+          }
         }
       }
+    } catch (error) {
+      console.error("获取仓库配置出错:", error);
     }
     
     return configs;
@@ -356,46 +411,61 @@ export default {
    * 删除旧文件
    */
   async deleteOldFiles(repo, path, env) {
-    const prefix = path.startsWith("/") ? path.slice(1) : path;
-    
-    // 列出存储桶中的文件
-    const options = prefix ? { prefix: `${prefix}/` } : undefined;
-    const listed = await env.R2_BUCKET.list(options);
-    
-    // 删除所有匹配的文件
-    const promises = [];
-    for (const object of listed.objects) {
-      // 跳过版本信息文件
-      if (object.key.endsWith(`${repo.replace(/\//g, "-")}-version.json`)) {
-        continue;
+    try {
+      const prefix = path.startsWith("/") ? path.slice(1) : path;
+      
+      // 列出存储桶中的文件
+      const options = prefix ? { prefix: `${prefix}/` } : undefined;
+      const listed = await env.R2_BUCKET.list(options);
+      
+      // 删除所有匹配的文件
+      const promises = [];
+      for (const object of listed.objects) {
+        // 跳过版本信息文件
+        if (object.key.endsWith(`${repo.replace(/\//g, "-")}-version.json`)) {
+          continue;
+        }
+        
+        // 如果文件在指定路径下，则删除
+        if (!prefix || object.key.startsWith(`${prefix}/`)) {
+          promises.push(env.R2_BUCKET.delete(object.key));
+        }
       }
       
-      // 如果文件在指定路径下，则删除
-      if (!prefix || object.key.startsWith(`${prefix}/`)) {
-        promises.push(env.R2_BUCKET.delete(object.key));
-      }
+      await Promise.all(promises);
+      console.log(`已删除旧文件`);
+    } catch (error) {
+      console.error("删除旧文件时出错:", error);
+      throw new Error(`删除旧文件时出错: ${error.message}`);
     }
-    
-    await Promise.all(promises);
-    console.log(`已删除旧文件`);
   },
 
   /**
    * 下载并上传资源文件
    */
   async downloadAndUploadAssets(repo, assets, path, env) {
-    // 过滤掉 Source code 资源
-    const validAssets = assets.filter(asset => {
-      return !asset.name.includes("Source code") && 
-             !asset.name.endsWith(".sha256") &&
-             !asset.name.endsWith(".asc");
-    });
-    
-    console.log(`找到 ${validAssets.length} 个有效资源文件`);
-    
-    // 处理每个资源
-    for (const asset of validAssets) {
-      await this.processAsset(repo, asset, path, env);
+    try {
+      // 过滤掉 Source code 资源
+      const validAssets = assets.filter(asset => {
+        return !asset.name.includes("Source code") && 
+               !asset.name.endsWith(".sha256") &&
+               !asset.name.endsWith(".asc");
+      });
+      
+      console.log(`找到 ${validAssets.length} 个有效资源文件`);
+      
+      if (validAssets.length === 0) {
+        console.warn("未找到有效资源文件");
+        return;
+      }
+      
+      // 处理每个资源
+      for (const asset of validAssets) {
+        await this.processAsset(repo, asset, path, env);
+      }
+    } catch (error) {
+      console.error("下载上传资源文件时出错:", error);
+      throw new Error(`下载上传资源文件时出错: ${error.message}`);
     }
   },
 
@@ -403,38 +473,43 @@ export default {
    * 处理单个资源文件
    */
   async processAsset(repo, asset, path, env) {
-    // 确定目标目录 (操作系统类型)
-    const osType = this.determineOSType(asset.name);
-    
-    // 构建存储路径
-    let storagePath = path.startsWith("/") ? path.slice(1) : path;
-    if (storagePath && !storagePath.endsWith("/")) {
-      storagePath += "/";
-    }
-    
-    // 如果有确定的操作系统类型，则添加到路径中
-    if (osType && path) {
-      storagePath += `${osType}/`;
-    }
-    
-    // 最终的文件 key
-    const fileKey = `${storagePath}${asset.name}`;
-    
-    // 下载文件
-    console.log(`下载资源: ${asset.name}`);
-    const response = await fetch(asset.browser_download_url);
-    
-    if (!response.ok) {
-      throw new Error(`下载文件失败: ${response.status} ${response.statusText}`);
-    }
-    
-    // 上传到 R2
-    console.log(`上传文件到 R2: ${fileKey}`);
-    await env.R2_BUCKET.put(fileKey, response.body, {
-      httpMetadata: {
-        contentType: asset.content_type
+    try {
+      // 确定目标目录 (操作系统类型)
+      const osType = this.determineOSType(asset.name);
+      
+      // 构建存储路径
+      let storagePath = path.startsWith("/") ? path.slice(1) : path;
+      if (storagePath && !storagePath.endsWith("/")) {
+        storagePath += "/";
       }
-    });
+      
+      // 如果有确定的操作系统类型，则添加到路径中
+      if (osType && path) {
+        storagePath += `${osType}/`;
+      }
+      
+      // 最终的文件 key
+      const fileKey = `${storagePath}${asset.name}`;
+      
+      // 下载文件
+      console.log(`下载资源: ${asset.name}`);
+      const response = await fetch(asset.browser_download_url);
+      
+      if (!response.ok) {
+        throw new Error(`下载文件失败: ${response.status} ${response.statusText}`);
+      }
+      
+      // 上传到 R2
+      console.log(`上传文件到 R2: ${fileKey}`);
+      await env.R2_BUCKET.put(fileKey, response.body, {
+        httpMetadata: {
+          contentType: asset.content_type
+        }
+      });
+    } catch (error) {
+      console.error(`处理资源 ${asset.name} 时出错:`, error);
+      throw new Error(`处理资源 ${asset.name} 时出错: ${error.message}`);
+    }
   },
 
   /**
@@ -480,34 +555,43 @@ export default {
    * 保存版本信息
    */
   async saveVersionInfo(repo, version, path, env) {
-    const versionKey = this.getVersionKey(repo, path);
-    const versionInfo = {
-      repo,
-      version,
-      updatedAt: new Date().toISOString()
-    };
-    
-    await env.R2_BUCKET.put(versionKey, JSON.stringify(versionInfo), {
-      httpMetadata: {
-        contentType: "application/json"
-      }
-    });
+    try {
+      const versionKey = this.getVersionKey(repo, path);
+      const versionInfo = {
+        repo,
+        version,
+        updatedAt: new Date().toISOString()
+      };
+      
+      await env.R2_BUCKET.put(versionKey, JSON.stringify(versionInfo), {
+        httpMetadata: {
+          contentType: "application/json"
+        }
+      });
+    } catch (error) {
+      console.error("保存版本信息时出错:", error);
+      throw new Error(`保存版本信息时出错: ${error.message}`);
+    }
   },
 
   /**
    * 保存 API 速率限制信息
    */
   saveRateLimitInfo(headers) {
-    const remaining = headers.get('x-ratelimit-remaining');
-    const limit = headers.get('x-ratelimit-limit');
-    const reset = headers.get('x-ratelimit-reset');
-    
-    if (remaining && limit && reset) {
-      this.apiRateLimit = {
-        remaining: parseInt(remaining),
-        limit: parseInt(limit),
-        reset: new Date(parseInt(reset) * 1000)
-      };
+    try {
+      const remaining = headers.get('x-ratelimit-remaining');
+      const limit = headers.get('x-ratelimit-limit');
+      const reset = headers.get('x-ratelimit-reset');
+      
+      if (remaining && limit && reset) {
+        this.apiRateLimit = {
+          remaining: parseInt(remaining),
+          limit: parseInt(limit),
+          reset: new Date(parseInt(reset) * 1000)
+        };
+      }
+    } catch (error) {
+      console.error("保存API速率限制信息时出错:", error);
     }
   },
 
@@ -581,6 +665,12 @@ export default {
       }
     }
     
+    // 添加错误信息
+    let errorMessageHtml = '';
+    if (this.errorMessage) {
+      errorMessageHtml = `<div class="error-message">${this.errorMessage}</div>`;
+    }
+    
     // 添加 API 速率限制信息
     let apiRateLimitInfo = "GitHub API 速率: 未知";
     if (this.apiRateLimit) {
@@ -590,6 +680,7 @@ export default {
     
     // 替换模板中的占位符
     let html = HTML_TEMPLATE
+      .replace("{{ERROR_MESSAGE}}", errorMessageHtml)
       .replace("{{TABLE_ROWS}}", tableRows)
       .replace("{{LAST_CHECK_TIME}}", lastCheckTime ? new Date(lastCheckTime * 1000).toLocaleString() : "未检查")
       .replace("{{API_RATE_LIMIT}}", apiRateLimitInfo);

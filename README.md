@@ -2,6 +2,10 @@
 
 GHRtoCFR 是一个 Cloudflare Workers 项目，可以自动监控 GitHub 仓库的 Releases 并将文件同步到 Cloudflare R2 存储桶中。
 
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/hcllmsx/GHRtoCFR)
+
+> 注意：在使用一键部署按钮前，请先将上面的链接中的 `YOUR_USERNAME` 替换为您的 GitHub 用户名。
+
 ## 功能特点
 
 - ✅ 自动监控 GitHub 仓库的最新版本
@@ -13,12 +17,24 @@ GHRtoCFR 是一个 Cloudflare Workers 项目，可以自动监控 GitHub 仓库�
 
 ## 在线部署教程
 
-### 前置条件
+### 一键部署
+
+点击上方的 "Deploy to Cloudflare Workers" 按钮，按照提示授权并部署。部署成功后，您仍然需要：
+
+1. **创建并绑定 R2 存储桶**
+   - 按照下方"手动部署"的第 1 步和第 3 步操作
+
+2. **配置环境变量和触发器**
+   - 按照下方"手动部署"的第 4 步和第 5 步操作
+
+### 手动部署
+
+#### 前置条件
 
 - 拥有 Cloudflare 账号
 - 在 Cloudflare 中创建了 R2 存储桶
 
-### 部署步骤
+#### 部署步骤
 
 1. **创建 R2 存储桶**
 
@@ -76,6 +92,21 @@ GHRtoCFR 是一个 Cloudflare Workers 项目，可以自动监控 GitHub 仓库�
 | `REPO_x` | 监控的仓库配置 (x 为数字编号) | `2dust/v2rayN:/apps/v2ray` |
 | `CHECK_INTERVAL` | 检查更新的间隔时间（秒）| `86400` (1天) |
 
+### 触发器与检查间隔说明
+
+Worker 配置的 Cron 触发器（默认为每分钟执行一次）与 `CHECK_INTERVAL` 环境变量的关系：
+
+- **Cron 触发器**：定义 Worker 被 Cloudflare 平台唤醒执行的频率
+- **CHECK_INTERVAL**：定义实际检查 GitHub 仓库是否有更新的间隔
+
+虽然 Worker 可能每分钟被触发一次，但它会在内部检查距离上次执行同步任务的时间是否已经达到 `CHECK_INTERVAL` 设定的秒数。如果未达到，则不会执行实际的同步操作。
+
+您可以根据需求修改 Cron 触发频率：
+- `0 * * * *` - 每小时触发一次
+- `0 0 * * *` - 每天触发一次
+
+无论如何设置触发频率，实际执行同步的间隔仍由 `CHECK_INTERVAL` 控制。
+
 ### 仓库配置格式
 
 `REPO_x` 环境变量的值采用以下格式：`用户名/仓库名:存储路径`
@@ -116,4 +147,4 @@ GHRtoCFR 是一个 Cloudflare Workers 项目，可以自动监控 GitHub 仓库�
 
 ## 许可证
 
-MIT 
+MIT

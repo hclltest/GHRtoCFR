@@ -346,9 +346,9 @@ export default {
             date: "-",
             path: config.path,
             status: "pending",
-            message: "尚未同步，点击"同步仓库"按钮开始同步"
+            message: "尚未同步，点击\"同步仓库\"按钮开始同步"
           }));
-          this.infoMessage = "已检测到仓库配置，点击"同步仓库"按钮开始同步";
+          this.infoMessage = "已检测到仓库配置，点击\"同步仓库\"按钮开始同步";
         } else {
           this.infoMessage = "未检测到有效的仓库配置，请确认已添加 REPO_1、REPO_2 等环境变量";
         }

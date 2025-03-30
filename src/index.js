@@ -30,6 +30,29 @@ const HTML_TEMPLATE = `
       margin-bottom: 30px;
       color: #2563eb;
     }
+    .action-bar {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 25px;
+      gap: 15px;
+    }
+    .btn {
+      background-color: #2563eb;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background-color 0.2s;
+    }
+    .btn:hover {
+      background-color: #1d4ed8;
+    }
+    .btn:disabled {
+      background-color: #93c5fd;
+      cursor: not-allowed;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -80,22 +103,33 @@ const HTML_TEMPLATE = `
       margin: 20px 0;
       text-align: center;
     }
-    .last-check {
+    .info-message {
+      background-color: #f0f9ff;
+      color: #0369a1;
+      padding: 15px;
+      border-radius: 8px;
+      margin: 20px 0;
+      text-align: center;
+    }
+    .footer {
       text-align: center;
       margin-top: 30px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+    .last-check {
       font-size: 0.9rem;
       color: #666;
     }
     .api-info {
-      text-align: center;
-      margin-top: 10px;
       font-size: 0.9rem;
       color: #666;
       padding: 8px 16px;
       background-color: #f8fafc;
       border-radius: 6px;
       display: inline-block;
-      margin: 15px auto;
     }
     .api-count {
       font-weight: 600;
@@ -103,6 +137,35 @@ const HTML_TEMPLATE = `
     }
     .api-reset {
       font-style: italic;
+    }
+    .sync-status {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      background-color: #dbeafe;
+      color: #1e40af;
+      padding: 15px;
+      border-radius: 8px;
+      margin: 20px auto;
+      max-width: 600px;
+      text-align: center;
+    }
+    .spinner {
+      border: 3px solid rgba(0, 0, 0, 0.1);
+      border-radius: 50%;
+      border-top: 3px solid #2563eb;
+      width: 20px;
+      height: 20px;
+      animation: spin 1s linear infinite;
+      display: inline-block;
+    }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    .sync-complete {
+      background-color: #dcfce7;
+      color: #166534;
     }
     @media (max-width: 768px) {
       table {
@@ -115,6 +178,17 @@ const HTML_TEMPLATE = `
 <body>
   <h1>GitHub Releases to Cloudflare R2</h1>
   {{ERROR_MESSAGE}}
+  {{INFO_MESSAGE}}
+  
+  <div class="action-bar">
+    <button id="syncButton" class="btn" onclick="triggerSync()">同步仓库</button>
+  </div>
+  
+  <div id="syncStatus" class="sync-status">
+    <div class="spinner"></div>
+    <span>正在同步仓库，请稍候...</span>
+  </div>
+  
   <table>
     <thead>
       <tr>
@@ -129,8 +203,40 @@ const HTML_TEMPLATE = `
       {{TABLE_ROWS}}
     </tbody>
   </table>
-  <div class="last-check">最后检查时间: {{LAST_CHECK_TIME}}</div>
-  <div class="api-info">{{API_RATE_LIMIT}}</div>
+  
+  <div class="footer">
+    <div class="last-check">最后检查时间: {{LAST_CHECK_TIME}}</div>
+    <div class="api-info">{{API_RATE_LIMIT}}</div>
+  </div>
+  
+  <script>
+  function triggerSync() {
+    const syncButton = document.getElementById('syncButton');
+    const syncStatus = document.getElementById('syncStatus');
+    
+    syncButton.disabled = true;
+    syncStatus.style.display = 'flex';
+    
+    fetch('/sync')
+      .then(response => {
+        if (response.ok) {
+          return response.text();
+        }
+        throw new Error('同步请求失败');
+      })
+      .then(data => {
+        // 5秒后刷新页面，获取最新状态
+        setTimeout(() => {
+          window.location.reload();
+        }, 5000);
+      })
+      .catch(error => {
+        syncStatus.innerHTML = \`<span style="color: #dc2626;">\${error.message}</span>\`;
+        syncStatus.classList.add('sync-error');
+        syncButton.disabled = false;
+      });
+  }
+  </script>
 </body>
 </html>
 `;
@@ -147,6 +253,12 @@ export default {
   
   // 存储错误信息
   errorMessage: null,
+  
+  // 存储信息消息
+  infoMessage: null,
+  
+  // 是否正在进行同步
+  isSyncing: false,
 
   /**
    * 处理 HTTP 请求
@@ -170,7 +282,24 @@ export default {
         if (!hasR2Binding) {
           return new Response("错误: R2 存储桶未绑定，无法执行同步操作", { status: 400 });
         }
-        await this.handleSync(env);
+        
+        // 检查是否已经有正在进行的同步任务
+        if (this.isSyncing) {
+          return new Response("同步任务已在进行中，请稍后再试", { status: 409 });
+        }
+        
+        // 标记为正在同步
+        this.isSyncing = true;
+        
+        // 使用 ctx.waitUntil 允许同步在后台继续完成
+        ctx.waitUntil((async () => {
+          try {
+            await this.handleSync(env);
+          } finally {
+            this.isSyncing = false;
+          }
+        })());
+        
         return new Response("同步任务已触发", { status: 200 });
       }
       
@@ -180,7 +309,9 @@ export default {
           repos: this.syncedRepos,
           lastCheck: lastCheckTime ? new Date(lastCheckTime * 1000).toISOString() : null,
           apiRateLimit: this.apiRateLimit,
-          error: this.errorMessage
+          error: this.errorMessage,
+          info: this.infoMessage,
+          isSyncing: this.isSyncing
         }), {
           headers: { "Content-Type": "application/json" },
           status: 200
@@ -204,6 +335,25 @@ export default {
         await this.fetchGitHubRateLimit(env);
       }
       
+      // 如果还没有仓库信息，尝试获取配置的仓库
+      if (this.syncedRepos.length === 0) {
+        const repoConfigs = this.getRepoConfigs(env);
+        if (repoConfigs.length > 0) {
+          // 为每个配置的仓库创建一个临时显示记录
+          this.syncedRepos = repoConfigs.map(config => ({
+            repo: config.repo,
+            version: "未同步",
+            date: "-",
+            path: config.path,
+            status: "pending",
+            message: "尚未同步，点击"同步仓库"按钮开始同步"
+          }));
+          this.infoMessage = "已检测到仓库配置，点击"同步仓库"按钮开始同步";
+        } else {
+          this.infoMessage = "未检测到有效的仓库配置，请确认已添加 REPO_1、REPO_2 等环境变量";
+        }
+      }
+      
       return this.generateStatusPage();
     } catch (error) {
       console.error("处理请求时出错:", error);
@@ -223,16 +373,28 @@ export default {
         return;
       }
       
+      // 检查是否已经有正在进行的同步任务
+      if (this.isSyncing) {
+        console.log("已有同步任务正在进行，跳过本次定时触发");
+        return;
+      }
+      
       const now = Math.floor(Date.now() / 1000);
       const checkInterval = parseInt(env.CHECK_INTERVAL || DEFAULT_CHECK_INTERVAL);
       
       // 检查是否到达检查间隔
       if (now - lastCheckTime >= checkInterval) {
-        await this.handleSync(env);
-        lastCheckTime = now;
+        this.isSyncing = true;
+        try {
+          await this.handleSync(env);
+          lastCheckTime = now;
+        } finally {
+          this.isSyncing = false;
+        }
       }
     } catch (error) {
       console.error("定时任务执行出错:", error);
+      this.isSyncing = false;
     }
   },
 
@@ -241,9 +403,8 @@ export default {
    */
   async handleSync(env) {
     try {
-      // 清除之前的同步信息
-      this.syncedRepos = [];
-      this.errorMessage = null;
+      // 清除之前的信息消息
+      this.infoMessage = null;
       
       // 检查 R2 绑定
       const hasR2Binding = typeof env.R2_BUCKET !== 'undefined';
@@ -259,24 +420,78 @@ export default {
         return;
       }
       
+      // 创建新的同步信息数组
+      const newSyncedRepos = [];
+      
       // 处理每个仓库
       for (const config of repoConfigs) {
         try {
-          await this.processRepo(config, env);
+          console.log(`开始处理仓库: ${config.repo}`);
+          
+          // 获取最新版本信息
+          const releaseInfo = await this.fetchLatestRelease(config.repo, env);
+          if (!releaseInfo) {
+            throw new Error("无法获取最新版本信息");
+          }
+          
+          const { tag_name, published_at, assets } = releaseInfo;
+          console.log(`最新版本: ${tag_name}, 发布于: ${published_at}`);
+          
+          // 获取当前 R2 存储桶中的文件，检查是否需要更新
+          const needUpdate = await this.checkNeedUpdate(config.repo, tag_name, config.path, env);
+          
+          if (needUpdate) {
+            console.log(`需要更新到新版本: ${tag_name}`);
+            
+            // 删除旧文件
+            await this.deleteOldFiles(config.repo, config.path, env);
+            
+            // 下载并上传新文件
+            await this.downloadAndUploadAssets(config.repo, assets, config.path, env);
+            
+            // 记录版本信息
+            await this.saveVersionInfo(config.repo, tag_name, config.path, env);
+            
+            // 记录同步结果
+            newSyncedRepos.push({
+              repo: config.repo,
+              version: tag_name,
+              date: published_at,
+              path: config.path,
+              status: "updated",
+              message: "已更新到最新版本"
+            });
+          } else {
+            console.log(`无需更新，当前已是最新版本: ${tag_name}`);
+            
+            // 记录同步结果
+            newSyncedRepos.push({
+              repo: config.repo,
+              version: tag_name,
+              date: published_at,
+              path: config.path,
+              status: "latest",
+              message: "当前已是最新版本"
+            });
+          }
         } catch (error) {
           console.error(`处理仓库 ${config.repo} 时出错:`, error);
           
           // 记录错误信息
-          this.syncedRepos.push({
+          newSyncedRepos.push({
             repo: config.repo,
             version: "未知",
             date: new Date().toISOString(),
             path: config.path,
             status: "error",
-            error: error.message
+            message: error.message
           });
         }
       }
+      
+      // 更新同步信息
+      this.syncedRepos = newSyncedRepos;
+      
     } catch (error) {
       console.error("同步任务执行出错:", error);
       this.errorMessage = `同步任务执行出错: ${error.message}`;
@@ -310,51 +525,6 @@ export default {
     }
     
     return configs;
-  },
-
-  /**
-   * 处理单个仓库的同步
-   */
-  async processRepo(config, env) {
-    const { repo, path } = config;
-    
-    console.log(`正在处理仓库: ${repo}`);
-    
-    // 获取最新版本信息
-    const releaseInfo = await this.fetchLatestRelease(repo, env);
-    if (!releaseInfo) {
-      throw new Error("无法获取最新版本信息");
-    }
-    
-    const { tag_name, published_at, assets } = releaseInfo;
-    console.log(`最新版本: ${tag_name}，发布于: ${published_at}`);
-    
-    // 获取当前 R2 存储桶中的文件，检查是否需要更新
-    const needUpdate = await this.checkNeedUpdate(repo, tag_name, path, env);
-    
-    if (needUpdate) {
-      console.log(`需要更新到新版本: ${tag_name}`);
-      
-      // 删除旧文件
-      await this.deleteOldFiles(repo, path, env);
-      
-      // 下载并上传新文件
-      await this.downloadAndUploadAssets(repo, assets, path, env);
-      
-      // 记录版本信息
-      await this.saveVersionInfo(repo, tag_name, path, env);
-    } else {
-      console.log(`无需更新，当前已是最新版本: ${tag_name}`);
-    }
-    
-    // 记录同步结果
-    this.syncedRepos.push({
-      repo,
-      version: tag_name,
-      date: published_at,
-      path,
-      status: needUpdate ? "updated" : "latest"
-    });
   },
 
   /**
@@ -658,18 +828,39 @@ export default {
         } else if (repo.status === "latest") {
           statusClass = "status-success";
           statusText = "最新";
+        } else if (repo.status === "pending") {
+          statusClass = "status-pending";
+          statusText = "待同步";
         } else {
           statusClass = "status-pending";
           statusText = "未知";
+        }
+        
+        // 处理日期显示
+        let dateStr = repo.date;
+        if (repo.date && repo.date !== "-") {
+          try {
+            dateStr = new Date(repo.date).toLocaleString('zh-CN', {
+              year: 'numeric',
+              month: 'numeric',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+              hour12: false
+            });
+          } catch (e) {
+            console.error("日期格式化错误:", e);
+          }
         }
         
         tableRows += `
           <tr>
             <td>${repo.repo}</td>
             <td>${repo.version}</td>
-            <td>${new Date(repo.date).toLocaleString()}</td>
+            <td>${dateStr}</td>
             <td>${repo.path || "/"}</td>
-            <td><span class="status ${statusClass}">${statusText}</span></td>
+            <td><span class="status ${statusClass}" title="${repo.message || ''}">${statusText}</span></td>
           </tr>
         `;
       }
@@ -681,19 +872,67 @@ export default {
       errorMessageHtml = `<div class="error-message">${this.errorMessage}</div>`;
     }
     
+    // 添加信息消息
+    let infoMessageHtml = '';
+    if (this.infoMessage) {
+      infoMessageHtml = `<div class="info-message">${this.infoMessage}</div>`;
+    }
+    
     // 添加 API 速率限制信息
     let apiRateLimitInfo = "GitHub API 速率: 未知";
     if (this.apiRateLimit) {
-      const resetTime = this.apiRateLimit.reset.toLocaleString();
-      apiRateLimitInfo = `GitHub API 速率: <span class="api-count">${this.apiRateLimit.remaining}/${this.apiRateLimit.limit}</span> 次 (<span class="api-reset">重置时间: ${resetTime}</span>)`;
+      try {
+        const resetTime = this.apiRateLimit.reset.toLocaleString('zh-CN', {
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false
+        });
+        apiRateLimitInfo = `GitHub API 速率: <span class="api-count">${this.apiRateLimit.remaining}/${this.apiRateLimit.limit}</span> 次 (<span class="api-reset">重置时间: ${resetTime}</span>)`;
+      } catch (e) {
+        console.error("API速率时间格式化错误:", e);
+      }
+    }
+    
+    // 处理最后检查时间
+    let lastCheckTimeStr = "未检查";
+    if (lastCheckTime) {
+      try {
+        lastCheckTimeStr = new Date(lastCheckTime * 1000).toLocaleString('zh-CN', {
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false
+        });
+      } catch (e) {
+        console.error("最后检查时间格式化错误:", e);
+        lastCheckTimeStr = new Date(lastCheckTime * 1000).toLocaleString();
+      }
     }
     
     // 替换模板中的占位符
     let html = HTML_TEMPLATE
       .replace("{{ERROR_MESSAGE}}", errorMessageHtml)
+      .replace("{{INFO_MESSAGE}}", infoMessageHtml)
       .replace("{{TABLE_ROWS}}", tableRows)
-      .replace("{{LAST_CHECK_TIME}}", lastCheckTime ? new Date(lastCheckTime * 1000).toLocaleString() : "未检查")
+      .replace("{{LAST_CHECK_TIME}}", lastCheckTimeStr)
       .replace("{{API_RATE_LIMIT}}", apiRateLimitInfo);
+    
+    // 如果正在同步，添加额外的脚本使同步状态可见
+    if (this.isSyncing) {
+      html = html.replace('</script>', `
+        document.addEventListener('DOMContentLoaded', function() {
+          document.getElementById('syncButton').disabled = true;
+          document.getElementById('syncStatus').style.display = 'flex';
+        });
+      </script>`);
+    }
     
     return new Response(html, {
       headers: { "Content-Type": "text/html; charset=utf-8" }

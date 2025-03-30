@@ -154,9 +154,12 @@ export default {
   async fetch(request, env, ctx) {
     try {
       // 检查 R2 绑定
-      if (!env.R2_BUCKET) {
-        this.errorMessage = "错误: R2 存储桶未绑定，请在 Workers 设置中绑定 R2_BUCKET";
-        return this.generateStatusPage();
+      const hasR2Binding = typeof env.R2_BUCKET !== 'undefined';
+      if (!hasR2Binding) {
+        this.errorMessage = "注意: R2 存储桶未绑定，请在 Workers 设置中绑定 R2_BUCKET。当前仅可查看状态，无法执行同步操作。";
+      } else {
+        // 清除任何之前的错误
+        this.errorMessage = null;
       }
       
       // 获取当前 URL
@@ -164,6 +167,9 @@ export default {
       
       // 如果请求路径是 /sync，触发同步任务
       if (url.pathname === "/sync") {
+        if (!hasR2Binding) {
+          return new Response("错误: R2 存储桶未绑定，无法执行同步操作", { status: 400 });
+        }
         await this.handleSync(env);
         return new Response("同步任务已触发", { status: 200 });
       }
@@ -197,9 +203,6 @@ export default {
       if (!this.apiRateLimit) {
         await this.fetchGitHubRateLimit(env);
       }
-      
-      // 清除任何之前的错误
-      this.errorMessage = null;
       
       return this.generateStatusPage();
     } catch (error) {
@@ -241,6 +244,13 @@ export default {
       // 清除之前的同步信息
       this.syncedRepos = [];
       this.errorMessage = null;
+      
+      // 检查 R2 绑定
+      const hasR2Binding = typeof env.R2_BUCKET !== 'undefined';
+      if (!hasR2Binding) {
+        this.errorMessage = "错误: R2 存储桶未绑定，请在 Workers 设置中绑定 R2_BUCKET";
+        return;
+      }
       
       // 检查是否有配置仓库
       const repoConfigs = this.getRepoConfigs(env);

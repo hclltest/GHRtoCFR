@@ -7,7 +7,7 @@ crons = ["0 0 * * *"]
 
 [[r2_buckets]]
 binding = "R2_BUCKET"
-bucket_name = "github-releases"
+bucket_name = "$BUCKET_NAME"
 
 [observability.logs]
 enabled = true

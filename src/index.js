@@ -482,23 +482,63 @@ export default {
         await this.fetchGitHubRateLimit(env);
       }
       
-      // 如果还没有仓库信息，尝试获取配置的仓库
-      if (this.syncedRepos.length === 0) {
-        const repoConfigs = this.getRepoConfigs(env);
-        if (repoConfigs.length > 0) {
-          // 为每个配置的仓库创建一个临时显示记录
-          this.syncedRepos = repoConfigs.map(config => ({
-            repo: config.repo,
-            version: "未同步",
-            date: "-",
-            path: config.path,
-            status: "pending",
-            message: "尚未同步，点击\"同步仓库\"按钮开始同步"
-          }));
-          // 移除已检测到仓库配置的提示
-          this.infoMessage = null;
-        } else {
-          this.infoMessage = "未检测到有效的仓库配置，请确认已添加 REPO_1、REPO_2 等环境变量";
+      // 如果还没有仓库信息，尝试获取配置的仓库并从KV中加载其状态
+      if (this.syncedRepos.length === 0 || this.syncedRepos.some(repo => repo.status === "pending")) {
+        try {
+          const repoConfigs = this.getRepoConfigs(env);
+          if (repoConfigs.length > 0) {
+            // 从KV加载存储的版本信息
+            const updatedRepos = [];
+            
+            for (const config of repoConfigs) {
+              try {
+                const repoKey = `repo:${config.repo}`;
+                const versionInfoJson = await env.SYNC_STATUS.get(repoKey);
+                
+                if (versionInfoJson) {
+                  // 已同步过，加载状态
+                  const versionInfo = JSON.parse(versionInfoJson);
+                  updatedRepos.push({
+                    repo: config.repo,
+                    version: versionInfo.version,
+                    date: versionInfo.updatedAt,
+                    path: config.path,
+                    status: "latest",
+                    message: "当前已是最新版本"
+                  });
+                } else {
+                  // 未同步过，创建临时记录
+                  updatedRepos.push({
+                    repo: config.repo,
+                    version: "未同步",
+                    date: "-",
+                    path: config.path,
+                    status: "pending",
+                    message: "尚未同步，点击\"同步仓库\"按钮开始同步"
+                  });
+                }
+              } catch (error) {
+                console.error(`加载仓库 ${config.repo} 状态信息失败:`, error);
+                // 如果读取失败，添加一个显示错误的条目
+                updatedRepos.push({
+                  repo: config.repo,
+                  version: "未知",
+                  date: "-",
+                  path: config.path,
+                  status: "error",
+                  message: `加载状态失败: ${error.message}`
+                });
+              }
+            }
+            
+            // 更新内存中的同步状态
+            this.syncedRepos = updatedRepos;
+          } else {
+            this.infoMessage = "未检测到有效的仓库配置，请确认已添加 REPO_1、REPO_2 等环境变量";
+          }
+        } catch (error) {
+          console.error("加载仓库状态时出错:", error);
+          this.errorMessage = `加载仓库状态时出错: ${error.message}`;
         }
       }
       
@@ -813,33 +853,58 @@ export default {
   /**
    * 检查是否需要更新
    */
-  async checkNeedUpdate(repo, newVersion, path, env) {
+  async checkNeedUpdate(repo, currentVersion, path, env) {
     try {
-      // 检查版本信息文件
-      const versionKey = this.getVersionKey(repo, path);
-      const versionObj = await env.R2_BUCKET.get(versionKey);
+      // 首先从KV获取版本信息
+      const repoKey = `repo:${repo}`;
+      const versionInfoJson = await env.SYNC_STATUS.get(repoKey);
       
-      if (versionObj) {
-        const versionInfo = await versionObj.json();
-        return versionInfo.version !== newVersion;
+      if (versionInfoJson) {
+        // 如果有版本信息，比较版本
+        const versionInfo = JSON.parse(versionInfoJson);
+        if (versionInfo.version === currentVersion) {
+          // 版本相同，无需更新
+          console.log(`KV中版本相同，无需更新: ${currentVersion}`);
+          return false;
+        }
+        console.log(`KV中发现旧版本: ${versionInfo.version}，需要更新到: ${currentVersion}`);
+      } else {
+        // 如果KV中没有版本信息，尝试从R2获取（向后兼容）
+        console.log(`KV中没有版本信息，检查R2存储`);
+        const versionKey = this.getVersionKey(repo, path);
+        const versionObj = await env.R2_BUCKET.get(versionKey);
+        
+        if (versionObj) {
+          const versionInfo = await versionObj.json();
+          if (versionInfo.version === currentVersion) {
+            // 从R2找到了版本信息且版本相同，无需更新
+            // 但是我们会将信息复制到KV以便未来使用
+            await env.SYNC_STATUS.put(repoKey, JSON.stringify(versionInfo));
+            console.log(`R2中版本相同，已同步到KV: ${currentVersion}`);
+            return false;
+          }
+        }
       }
       
-      // 没有版本信息，需要更新
+      // 如果未找到版本信息或版本不同，需要更新
       return true;
     } catch (error) {
       console.error("检查更新时出错:", error);
-      // 出错时默认需要更新
+      // 出错时，我们假设需要更新
       return true;
     }
   },
 
   /**
-   * 获取版本信息文件的 key
+   * 获取版本信息的键名
    */
   getVersionKey(repo, path) {
-    const basePath = path.startsWith("/") ? path.slice(1) : path;
     const repoId = repo.replace(/\//g, "-");
-    return basePath ? `${basePath}/${repoId}-version.json` : `${repoId}-version.json`;
+    let storagePath = path.startsWith("/") ? path.slice(1) : path;
+    if (storagePath && !storagePath.endsWith("/")) {
+      storagePath += "/";
+    }
+    return `${storagePath}${repoId}-version.json`;
   },
 
   /**
@@ -981,21 +1046,35 @@ export default {
    */
   async saveVersionInfo(repo, version, path, env) {
     try {
-      const versionKey = this.getVersionKey(repo, path);
+      // 构建版本信息 JSON
       const versionInfo = {
-        repo,
-        version,
-        updatedAt: new Date().toISOString()
+        repo: repo,
+        version: version,
+        updatedAt: new Date().toISOString(),
+        path: path
       };
       
+      // 将版本信息保存到 KV
+      const repoKey = `repo:${repo}`;
+      await env.SYNC_STATUS.put(repoKey, JSON.stringify(versionInfo));
+      
+      // 我们仍然保留原来的R2存储，用于存储实际文件
+      // 但是同步状态信息现在存储在KV中
+      const repoId = repo.replace(/\//g, "-");
+      let storagePath = path.startsWith("/") ? path.slice(1) : path;
+      if (storagePath && !storagePath.endsWith("/")) {
+        storagePath += "/";
+      }
+      const versionKey = `${storagePath}${repoId}-version.json`;
+      
       await env.R2_BUCKET.put(versionKey, JSON.stringify(versionInfo), {
-        httpMetadata: {
-          contentType: "application/json"
-        }
+        contentType: "application/json"
       });
+      
+      console.log(`版本信息已保存到 KV: ${repoKey}`);
     } catch (error) {
       console.error("保存版本信息时出错:", error);
-      throw new Error(`保存版本信息时出错: ${error.message}`);
+      throw error;
     }
   },
 

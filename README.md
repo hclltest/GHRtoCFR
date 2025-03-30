@@ -47,14 +47,25 @@ GHRtoCFR (GitHub Releases to Cloudflare R2) 是一个 Cloudflare Workers 项目�
    - **存储桶** 选择你之前创建的存储桶
    - 点击 **保存**
 
-4. **配置触发器**
+4. **创建并绑定 KV 命名空间**
+
+   - 在 Cloudflare 控制台中，进入**Workers & Pages** > **KV**
+   - 点击**创建命名空间**，命名为 `sync-status`（或你喜欢的名称）
+   - 记下创建的命名空间ID
+   - 回到 Worker 的**设置** > **变量** > **KV 命名空间绑定**
+   - 点击**添加绑定**
+   - **变量名称**填写`SYNC_STATUS`（必须使用这个名称）
+   - **KV命名空间**选择刚才创建的命名空间
+   - 点击**保存**
+
+5. **配置触发器**
 
    - 在 Worker 详情页面，点击 **触发器** 标签
    - 在 **Cron 触发器** 部分，点击 **添加 Cron 触发器**
    - 选择 **自定义** 并输入 `* * * * *`（每分钟执行一次）
    - 点击 **保存**
 
-5. **配置环境变量**
+6. **配置环境变量**
 
    - 回到 **设置** 标签，找到 **变量** 部分，点击 **环境变量** 标签
    - 点击 **添加变量**
@@ -65,7 +76,7 @@ GHRtoCFR (GitHub Releases to Cloudflare R2) 是一个 Cloudflare Workers 项目�
      - `CHECK_INTERVAL`：检查更新的间隔时间（秒），默认为 604800（7天）
    - 点击 **保存**
 
-6. **测试服务**
+7. **测试服务**
 
    - 访问你的 Worker URL（例如 `https://ghrtocfr.your-account.workers.dev`）
    - 如果配置正确，你将看到一个状态页面显示正在监控的仓库

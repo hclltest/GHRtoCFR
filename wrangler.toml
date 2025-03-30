@@ -9,9 +9,13 @@ crons = ["0 0 * * *"]
 binding = "R2_BUCKET"
 bucket_name = "github-releases" # 替换为您已创建的实际存储桶名称
 
+[[kv_namespaces]]
+binding = "SYNC_STATUS"
+id = "671e98de4e3c4d44a08cba27826cf7b3" # 替换为您创建的KV命名空间ID
+
 [vars]
 REPO_1 = "2dust/v2rayN:/z_test"
-REPO_2 = "2dust/v2rayNG:/z_test/Android"
+REPO_2 = "2dust/v2rayNG:/z_test"
 
 [observability.logs]
 enabled = true

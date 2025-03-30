@@ -7,11 +7,11 @@ crons = ["0 0 * * *"]
 
 [[r2_buckets]]
 binding = "R2_BUCKET"
-bucket_name = "github-releases" # 替换为您已创建的实际存储桶名称
+bucket_name = "list-free-share" # 替换为您已创建的实际存储桶名称
 
 [[kv_namespaces]]
 binding = "SYNC_STATUS"
-id = "671e98de4e3c4d44a08cba27826cf7b3" # 替换为您创建的KV命名空间ID
+id = "72b00ea89e6d4f79ba73fc8510017848" # 替换为您创建的KV命名空间ID
 
 [vars]
 REPO_1 = "2dust/v2rayN:/z_test"

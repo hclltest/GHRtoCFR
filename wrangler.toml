@@ -5,10 +5,9 @@ compatibility_date = "2025-01-01"
 [triggers]
 crons = ["0 0 * * *"]
 
-# 暂时注释掉 R2 绑定，首次部署成功后再通过控制台添加
-# [[r2_buckets]]
-# binding = "R2_BUCKET"
-# bucket_name = "$BUCKET_NAME"
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "github-releases" # 替换为您已创建的实际存储桶名称
 
 [observability.logs]
 enabled = true

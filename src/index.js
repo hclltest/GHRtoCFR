@@ -599,7 +599,8 @@ export default {
                   version: tag_name,
                   lastUpdate: new Date().toISOString(),
                   status: 'synced',
-                  path
+                  path,
+                  filePaths: [] // 初始化一个空的文件路径数组，会在文件上传时填充
                 };
                 await this.saveVersionInfo(env, repo, syncedRepo);
                 continue;
@@ -650,7 +651,8 @@ export default {
                 version: tag_name,
                 lastUpdate: new Date().toISOString(),
                 status: 'synced',
-                path
+                path,
+                filePaths: [] // 初始化一个空的文件路径数组，会在文件上传时填充
               };
               await this.saveVersionInfo(env, repo, syncedRepo);
               
@@ -879,6 +881,24 @@ export default {
       // 上传到 R2 存储桶
       await env.R2_BUCKET.put(storagePath, response.body);
       
+      // 记录上传的文件路径，方便后续删除时识别
+      const repoKey = `repo:${repo}`;
+      try {
+        const versionInfoStr = await env.SYNC_STATUS.get(repoKey);
+        if (versionInfoStr) {
+          const versionInfo = JSON.parse(versionInfoStr);
+          if (!versionInfo.filePaths) {
+            versionInfo.filePaths = [];
+          }
+          if (!versionInfo.filePaths.includes(storagePath)) {
+            versionInfo.filePaths.push(storagePath);
+            await env.SYNC_STATUS.put(repoKey, JSON.stringify(versionInfo));
+          }
+        }
+      } catch (err) {
+        console.error(`更新文件路径记录失败: ${err.message}`);
+      }
+      
       return storagePath;
     } catch (error) {
       console.error(`下载上传资源文件失败: ${asset.name}`, error);
@@ -961,6 +981,11 @@ export default {
       if (!env.SYNC_STATUS) {
         console.error('KV存储未绑定，无法保存版本信息');
         return;
+      }
+      
+      // 如果没有设置文件路径属性，添加一个默认的空数组
+      if (!versionInfo.filePaths && versionInfo.status === 'synced') {
+        versionInfo.filePaths = [];
       }
       
       // 使用repo作为键前缀，确保不同仓库的数据互不干扰
@@ -1048,15 +1073,16 @@ export default {
         } else if (repo.status === "updated") {
           statusClass = "status-success";
           statusText = "已更新";
-        } else if (repo.status === "latest") {
+        } else if (repo.status === "latest" || repo.status === "synced") {
           statusClass = "status-success";
           statusText = "最新";
         } else if (repo.status === "pending") {
           statusClass = "status-pending";
           statusText = "待同步";
         } else {
+          // 未知状态，显示实际状态名称以便调试
           statusClass = "status-pending";
-          statusText = "未知";
+          statusText = repo.status || "未知";
         }
         
         // 处理日期显示
@@ -1216,6 +1242,21 @@ export default {
         return;
       }
 
+      // 尝试从KV中获取该仓库的文件列表
+      let recordedFilePaths = [];
+      if (env.SYNC_STATUS) {
+        const repoKey = `repo:${repo}`;
+        try {
+          const versionInfoStr = await env.SYNC_STATUS.get(repoKey);
+          if (versionInfoStr) {
+            const versionInfo = JSON.parse(versionInfoStr);
+            recordedFilePaths = versionInfo.filePaths || [];
+          }
+        } catch (err) {
+          console.error(`获取文件路径记录失败: ${err.message}`);
+        }
+      }
+
       let objects;
       try {
         objects = await bucket.list();
@@ -1231,7 +1272,19 @@ export default {
 
       let deletedCount = 0;
       for (const object of objects.objects) {
-        // 只删除属于当前仓库的文件
+        // 优先检查文件是否在已记录的路径列表中
+        if (recordedFilePaths.includes(object.key)) {
+          try {
+            await bucket.delete(object.key);
+            console.log(`根据记录删除文件: ${object.key}`);
+            deletedCount++;
+            continue;
+          } catch (error) {
+            console.error(`删除文件 ${object.key} 失败: ${error.message}`);
+          }
+        }
+        
+        // 如果不在记录中，则使用启发式方法判断
         if (this.isFileFromRepo(object.key, repo)) {
           try {
             await bucket.delete(object.key);
@@ -1242,6 +1295,22 @@ export default {
           }
         }
       }
+      
+      // 更新KV中的文件路径记录
+      if (env.SYNC_STATUS) {
+        const repoKey = `repo:${repo}`;
+        try {
+          const versionInfoStr = await env.SYNC_STATUS.get(repoKey);
+          if (versionInfoStr) {
+            const versionInfo = JSON.parse(versionInfoStr);
+            versionInfo.filePaths = []; // 清空文件列表
+            await env.SYNC_STATUS.put(repoKey, JSON.stringify(versionInfo));
+          }
+        } catch (err) {
+          console.error(`清空文件路径记录失败: ${err.message}`);
+        }
+      }
+      
       console.log(`总共删除了 ${deletedCount} 个属于仓库 ${repo} 的文件`);
     } catch (error) {
       console.error("删除旧文件时出错:", error);
@@ -1253,20 +1322,66 @@ export default {
    * 检查文件是否属于特定仓库
    */
   isFileFromRepo(key, repo) {
+    // 尝试从KV中获取该仓库的文件列表
+    // 注意：这部分代码需要在实际使用时通过闭包或其他方式访问env对象
+    // 由于架构限制，此处仅为说明逻辑
+    
     const repoName = repo.split('/')[1]; // 从repo格式 "owner/name" 中提取name部分
-    // 检查文件名是否包含仓库名称
-    // 对于v2rayN和v2rayNG等相似名称，我们需要更精确的匹配
-    // 使用文件路径中的目录结构或文件命名模式来区分
-    if (key.includes(`/${repoName}/`) || key.includes(`${repoName}-`)) {
+    const repoOwner = repo.split('/')[0]; // 提取owner部分
+    
+    // 首先，如果文件路径中同时包含拥有者和仓库名，则非常可能属于该仓库
+    if (key.includes(`${repoOwner}/${repoName}/`) || key.includes(`${repoOwner}-${repoName}`)) {
+      return true;
+    }
+    
+    // 检查文件是否在仓库对应的平台文件夹中
+    const platforms = ["Windows", "macOS", "Linux", "Android", "Other"];
+    for (const platform of platforms) {
+      // 如果文件路径包含平台和仓库名，则很可能属于该仓库
+      if (key.includes(`${platform}/${repoName}`) || 
+          key.includes(`${repoName}/${platform}`) || 
+          key.includes(`${platform}/${repoName}-`)) {
+        return true;
+      }
+    }
+    
+    // 检查文件名是否明确包含仓库名称
+    if (key.includes(`/${repoName}/`) || key.includes(`/${repoName}-`) || key.includes(`-${repoName}.`)) {
       // 对于相似名称的特殊处理
       if (repoName === 'v2rayN' && key.includes('v2rayNG')) {
         return false; // 如果是v2rayN仓库，但路径中包含v2rayNG，则不属于此仓库
       }
-      if (repoName === 'v2rayNG' && !key.includes('v2rayNG')) {
+      if (repoName === 'v2rayNG' && (!key.includes('v2rayNG') || key === 'v2rayN')) {
         return false; // 如果是v2rayNG仓库，但路径中不包含v2rayNG，则不属于此仓库
       }
       return true;
     }
+    
+    // 检查是否是仓库的版本信息文件
+    const repoId = repo.replace(/\//g, "-");
+    if (key.endsWith(`${repoId}-version.json`)) {
+      return true;
+    }
+    
+    // 如果使用相同的存储路径，文件可能没有包含仓库名
+    // 这种情况下，我们可以检查文件类型来推断所属仓库
+    
+    // 如果文件是Android APK，优先归属给Android应用仓库
+    if ((key.endsWith('.apk') || key.includes('android')) && 
+        (repoName.toLowerCase().includes('android') || repoName.endsWith('NG'))) {
+      return true;
+    }
+    
+    // 如果文件是Windows可执行文件，优先归属给Windows应用仓库
+    if ((key.endsWith('.exe') || key.endsWith('.msi') || key.includes('win')) && 
+        (repoName.toLowerCase().includes('win') || repoName.endsWith('N'))) {
+      return true;
+    }
+    
+    // 这里可以添加更多的文件类型判断规则
+    // ...
+    
+    // 默认情况下，如果无法确定归属，不认为文件属于此仓库
     return false;
   },
 
@@ -1304,12 +1419,20 @@ export default {
               if (versionInfoJson) {
                 // 已同步过，加载状态
                 const versionInfo = JSON.parse(versionInfoJson);
+                
+                // 处理状态映射，确保前端显示正确
+                let status = versionInfo.status || "latest";
+                // 如果状态是synced，在前端将映射为latest
+                if (status === "synced") {
+                  status = "latest";
+                }
+                
                 updatedRepos.push({
                   repo: config.repo,
                   version: versionInfo.version || "未知",
                   date: versionInfo.updatedAt || versionInfo.lastUpdate || "-",
                   path: config.path,
-                  status: versionInfo.status || "latest",
+                  status: status,
                   message: versionInfo.error || "当前已是最新版本"
                 });
               } else {

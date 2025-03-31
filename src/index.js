@@ -620,6 +620,13 @@ export default {
                        !asset.name.endsWith(".asc");
               });
               
+              // 确保文件来源正确
+              validAssets.forEach(asset => {
+                if (!asset.sourceRepo) {
+                  asset.sourceRepo = repo;
+                }
+              });
+              
               await writer.write(encoder.encode(`找到 ${validAssets.length} 个有效资源文件\n`));
               
               // 跟踪平台文件上传情况
@@ -631,15 +638,21 @@ export default {
                 Other: 0
               };
               
+              let uploadedCount = 0;
               for (let i = 0; i < validAssets.length; i++) {
                 const asset = validAssets[i];
                 await writer.write(encoder.encode(`处理资源 (${i+1}/${validAssets.length}): ${asset.name}\n`));
                 
                 try {
                   const platform = this.determineOSType(asset.name);
-                  await this.downloadAndUploadAsset(asset, repo, path, platform, env);
-                  platformCounts[platform]++;
-                  await writer.write(encoder.encode(`成功上传: ${asset.name} → ${platform}\n`));
+                  const uploadedPath = await this.downloadAndUploadAsset(asset, repo, path, platform, env);
+                  if (uploadedPath) {  // 只有实际上传成功的文件才计数
+                    platformCounts[platform]++;
+                    uploadedCount++;
+                    await writer.write(encoder.encode(`成功上传: ${asset.name} → ${platform}\n`));
+                  } else {
+                    await writer.write(encoder.encode(`跳过: ${asset.name}，不属于当前仓库\n`));
+                  }
                 } catch (assetError) {
                   await writer.write(encoder.encode(`资源处理失败: ${asset.name} - ${assetError.message}\n`));
                 }
@@ -661,7 +674,7 @@ export default {
                 .map(([platform, count]) => `${platform}: ${count}个文件`)
                 .join(', ');
               
-              await writer.write(encoder.encode(`${repo} 同步完成，版本 ${tag_name}，共 ${validAssets.length} 个文件 (${platformSummary})\n`));
+              await writer.write(encoder.encode(`${repo} 同步完成，版本 ${tag_name}，共上传 ${uploadedCount} 个文件 (${platformSummary})\n`));
             } catch (error) {
               await writer.write(encoder.encode(`同步 ${repo} 时出错: ${error.message}\n`));
               // 更新为错误状态
@@ -739,6 +752,7 @@ export default {
       headers["Authorization"] = `token ${env.GITHUB_TOKEN}`;
     }
     
+    console.log(`正在获取仓库 ${repo} 的最新发布信息...`);
     const response = await fetch(apiUrl, { headers });
     
     // 保存 API 速率限制信息
@@ -748,7 +762,17 @@ export default {
       throw new Error(`获取 GitHub Release 失败: ${response.status} ${response.statusText}`);
     }
     
-    return await response.json();
+    const releaseInfo = await response.json();
+    console.log(`成功获取仓库 ${repo} 的最新发布信息，版本: ${releaseInfo.tag_name}`);
+    
+    // 为每个资源添加仓库标识，防止混淆
+    if (releaseInfo.assets && Array.isArray(releaseInfo.assets)) {
+      releaseInfo.assets.forEach(asset => {
+        asset.sourceRepo = repo; // 添加源仓库信息到资源对象
+      });
+    }
+    
+    return releaseInfo;
   },
 
   /**
@@ -917,6 +941,13 @@ export default {
    */
   async downloadAndUploadAsset(asset, repo, path, platform, env) {
     try {
+      // 确保资源确实来自当前仓库
+      if (asset.sourceRepo && asset.sourceRepo !== repo) {
+        console.warn(`跳过不属于当前仓库的资源: ${asset.name}，它属于 ${asset.sourceRepo}`);
+        return null;
+      }
+      
+      console.log(`开始下载资源 ${asset.name} 来自仓库 ${repo}...`);
       const response = await fetch(asset.browser_download_url);
       if (!response.ok) {
         throw new Error(`下载文件失败: ${response.status} ${response.statusText}`);
@@ -933,9 +964,29 @@ export default {
         storagePath += `${platform}/`;
       }
       
-      // 添加文件名
-      storagePath += asset.name;
+      // 添加仓库标识到文件名，防止不同仓库文件名相同导致覆盖
+      const repoName = repo.split('/')[1];
+      let fileName = asset.name;
       
+      // 只有当文件名中不包含仓库名时才添加前缀
+      if (!fileName.includes(repoName)) {
+        // 获取文件扩展名
+        const lastDotIndex = fileName.lastIndexOf('.');
+        if (lastDotIndex > 0) {
+          // 在文件名和扩展名之间插入仓库标识
+          const baseName = fileName.substring(0, lastDotIndex);
+          const extension = fileName.substring(lastDotIndex);
+          fileName = `${baseName}_${repoName}${extension}`;
+        } else {
+          // 没有扩展名的情况
+          fileName = `${fileName}_${repoName}`;
+        }
+      }
+      
+      // 更新存储路径使用修改后的文件名
+      storagePath += fileName;
+      
+      console.log(`上传资源 ${asset.name} 到路径 ${storagePath}`);
       // 上传到 R2 存储桶
       await env.R2_BUCKET.put(storagePath, response.body);
       console.log(`已上传文件 ${asset.name} 到 ${storagePath}`);
@@ -1032,15 +1083,27 @@ export default {
   determineOSType(filename) {
     const lowerName = filename.toLowerCase();
     
+    // 基于文件名和扩展名特征识别操作系统
+    // Android 应用特征
+    if (lowerName.includes("android") || 
+        lowerName.endsWith(".apk") ||
+        lowerName.includes("_android_") ||
+        lowerName.includes("mobile")) {
+      return "Android";
+    }
+    
+    // Windows 应用特征
     if (lowerName.includes("windows") || 
         lowerName.includes("win") || 
         lowerName.endsWith(".exe") || 
         lowerName.endsWith(".msi") || 
         lowerName.includes("win64") || 
-        lowerName.includes("win32")) {
+        lowerName.includes("win32") ||
+        lowerName.includes("desktop")) {
       return "Windows";
     }
     
+    // macOS 应用特征
     if (lowerName.includes("macos") || 
         lowerName.includes("darwin") || 
         lowerName.includes("mac") || 
@@ -1049,16 +1112,13 @@ export default {
       return "macOS";
     }
     
+    // Linux 应用特征
     if (lowerName.includes("linux") || 
         lowerName.endsWith(".deb") || 
         lowerName.endsWith(".rpm") || 
-        lowerName.endsWith(".appimage")) {
+        lowerName.endsWith(".appimage") ||
+        lowerName.includes("_linux_")) {
       return "Linux";
-    }
-    
-    if (lowerName.includes("android") || 
-        lowerName.endsWith(".apk")) {
-      return "Android";
     }
     
     // 如果无法确定，返回 Other
@@ -1334,6 +1394,8 @@ export default {
         return;
       }
 
+      console.log(`开始为仓库 ${repo} 清理旧文件...`);
+      
       // 尝试从KV中获取该仓库的文件列表
       let recordedFilePaths = [];
       if (env.SYNC_STATUS) {
@@ -1343,48 +1405,98 @@ export default {
           if (versionInfoStr) {
             const versionInfo = JSON.parse(versionInfoStr);
             recordedFilePaths = versionInfo.filePaths || [];
+            console.log(`从KV中获取到 ${repo} 的 ${recordedFilePaths.length} 个文件记录`);
           }
         } catch (err) {
           console.error(`获取文件路径记录失败: ${err.message}`);
         }
       }
 
+      // 获取存储路径，用于更精确的文件筛选
+      const repoConfig = this.getRepoConfigs(env).find(config => config.repo === repo);
+      const storagePath = repoConfig ? repoConfig.path : '';
+      const pathPrefix = storagePath && storagePath.startsWith("/") ? storagePath.substring(1) : storagePath;
+      const basePath = pathPrefix ? `${pathPrefix}/` : "";
+      console.log(`仓库 ${repo} 的存储路径前缀: "${basePath}"`);
+      
+      // 先尝试只列出该仓库存储路径下的文件
       let objects;
       try {
-        objects = await bucket.list();
+        if (basePath) {
+          objects = await bucket.list({ prefix: basePath });
+          console.log(`在路径 "${basePath}" 下找到 ${objects.objects ? objects.objects.length : 0} 个文件`);
+        } else {
+          objects = await bucket.list();
+          console.log(`在根目录下找到 ${objects.objects ? objects.objects.length : 0} 个文件`);
+        }
       } catch (error) {
         console.error(`列出R2对象失败: ${error.message}`);
         return;
       }
       
-      if (!objects || !objects.objects) {
-        console.log(`R2存储桶为空或返回格式异常`);
+      if (!objects || !objects.objects || objects.objects.length === 0) {
+        console.log(`R2存储桶为空或未找到符合条件的文件`);
         return;
       }
 
-      let deletedCount = 0;
+      // 准备需要删除的文件列表
+      const filesToDelete = [];
+      const repoName = repo.split('/')[1]; // 提取仓库名称部分
+      
       for (const object of objects.objects) {
-        // 优先检查文件是否在已记录的路径列表中
-        if (recordedFilePaths.includes(object.key)) {
-          try {
-            await bucket.delete(object.key);
-            console.log(`根据记录删除文件: ${object.key}`);
-            deletedCount++;
-            continue;
-          } catch (error) {
-            console.error(`删除文件 ${object.key} 失败: ${error.message}`);
-          }
+        // 跳过不在当前仓库存储路径下的文件
+        if (basePath && !object.key.startsWith(basePath)) {
+          continue;
         }
         
-        // 如果不在记录中，则使用启发式方法判断
+        // 优先检查文件是否在已记录的路径列表中
+        if (recordedFilePaths.includes(object.key)) {
+          filesToDelete.push(object.key);
+          console.log(`标记删除已记录的文件: ${object.key}`);
+          continue;
+        }
+        
+        // 如果不在记录中，使用更严格的规则判断
+        const fileName = object.key.split('/').pop() || '';
+        
+        // 1. 检查文件名是否包含明确的仓库标识
+        if (fileName.includes(`_${repoName}.`) || fileName.includes(`_${repoName}_`)) {
+          filesToDelete.push(object.key);
+          console.log(`标记删除含仓库标识的文件: ${object.key}`);
+          continue;
+        }
+        
+        // 2. 使用isFileFromRepo进行更全面的判断
         if (this.isFileFromRepo(object.key, repo)) {
-          try {
-            await bucket.delete(object.key);
-            console.log(`已删除文件: ${object.key}`);
-            deletedCount++;
-          } catch (error) {
-            console.error(`删除文件 ${object.key} 失败: ${error.message}`);
+          // 额外安全检查：确保不会删除其他仓库的文件
+          let belongsToOtherRepo = false;
+          
+          // 获取所有配置的仓库
+          const allRepos = this.getRepoConfigs(env);
+          for (const otherConfig of allRepos) {
+            if (otherConfig.repo !== repo && this.isFileFromRepo(object.key, otherConfig.repo)) {
+              belongsToOtherRepo = true;
+              console.log(`跳过可能属于仓库 ${otherConfig.repo} 的文件: ${object.key}`);
+              break;
+            }
           }
+          
+          if (!belongsToOtherRepo) {
+            filesToDelete.push(object.key);
+            console.log(`标记删除属于仓库 ${repo} 的文件: ${object.key}`);
+          }
+        }
+      }
+      
+      // 执行删除操作
+      let deletedCount = 0;
+      for (const key of filesToDelete) {
+        try {
+          await bucket.delete(key);
+          console.log(`已删除文件: ${key}`);
+          deletedCount++;
+        } catch (error) {
+          console.error(`删除文件 ${key} 失败: ${error.message}`);
         }
       }
       
@@ -1397,6 +1509,7 @@ export default {
             const versionInfo = JSON.parse(versionInfoStr);
             versionInfo.filePaths = []; // 清空文件列表
             await env.SYNC_STATUS.put(repoKey, JSON.stringify(versionInfo));
+            console.log(`已清空仓库 ${repo} 的文件路径记录`);
           }
         } catch (err) {
           console.error(`清空文件路径记录失败: ${err.message}`);
@@ -1414,15 +1527,20 @@ export default {
    * 检查文件是否属于特定仓库
    */
   isFileFromRepo(key, repo) {
-    // 尝试从KV中获取该仓库的文件列表
-    // 注意：这部分代码需要在实际使用时通过闭包或其他方式访问env对象
-    // 由于架构限制，此处仅为说明逻辑
-    
     const repoName = repo.split('/')[1]; // 从repo格式 "owner/name" 中提取name部分
     const repoOwner = repo.split('/')[0]; // 提取owner部分
     
+    // 文件名部分
+    const fileName = key.split('/').pop();
+    if (!fileName) return false;
+    
     // 首先，如果文件路径中同时包含拥有者和仓库名，则非常可能属于该仓库
     if (key.includes(`${repoOwner}/${repoName}/`) || key.includes(`${repoOwner}-${repoName}`)) {
+      return true;
+    }
+    
+    // 如果文件名中包含了添加的仓库标识（例如filename_repoName.exe）
+    if (fileName.includes(`_${repoName}.`) || fileName.includes(`_${repoName}_`)) {
       return true;
     }
     
@@ -1439,13 +1557,6 @@ export default {
     
     // 检查文件名是否明确包含仓库名称
     if (key.includes(`/${repoName}/`) || key.includes(`/${repoName}-`) || key.includes(`-${repoName}.`)) {
-      // 对于相似名称的特殊处理
-      if (repoName === 'v2rayN' && key.includes('v2rayNG')) {
-        return false; // 如果是v2rayN仓库，但路径中包含v2rayNG，则不属于此仓库
-      }
-      if (repoName === 'v2rayNG' && (!key.includes('v2rayNG') || key === 'v2rayN')) {
-        return false; // 如果是v2rayNG仓库，但路径中不包含v2rayNG，则不属于此仓库
-      }
       return true;
     }
     
@@ -1455,18 +1566,26 @@ export default {
       return true;
     }
     
-    // 如果使用相同的存储路径，文件可能没有包含仓库名
-    // 这种情况下，我们可以检查文件类型来推断所属仓库
+    // 基于文件扩展名和仓库名特征进行智能匹配
     
-    // 如果文件是Android APK，优先归属给Android应用仓库
-    if ((key.endsWith('.apk') || key.includes('android')) && 
-        (repoName.toLowerCase().includes('android') || repoName.endsWith('NG'))) {
+    // 检查仓库名是否包含某些关键词
+    const isAndroidRepo = repoName.toLowerCase().includes('android') || 
+                          repoName.toLowerCase().includes('mobile') || 
+                          repoName.toLowerCase().includes('app');
+                          
+    const isWindowsRepo = repoName.toLowerCase().includes('win') || 
+                         repoName.toLowerCase().includes('desktop') || 
+                         repoName.toLowerCase().includes('pc');
+    
+    // 如果文件是Android APK，优先归属给Android相关仓库
+    if ((key.endsWith('.apk') || key.includes('/Android/') || key.toLowerCase().includes('android')) && 
+        isAndroidRepo) {
       return true;
     }
     
-    // 如果文件是Windows可执行文件，优先归属给Windows应用仓库
-    if ((key.endsWith('.exe') || key.endsWith('.msi') || key.includes('win')) && 
-        (repoName.toLowerCase().includes('win') || repoName.endsWith('N'))) {
+    // 如果文件是Windows可执行文件，优先归属给Windows相关仓库
+    if ((key.endsWith('.exe') || key.endsWith('.msi') || key.includes('/Windows/') || key.toLowerCase().includes('win')) && 
+        isWindowsRepo) {
       return true;
     }
     

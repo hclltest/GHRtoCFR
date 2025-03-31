@@ -101,16 +101,47 @@ const HTML_TEMPLATE = `
       color: #dc2626;
     }
     .sync-log {
-      max-height: 200px;
+      max-height: 300px;
       overflow-y: auto;
-      background-color: #f8fafc;
-      border: 1px solid #e2e8f0;
+      background-color: #1a1a1a;
+      color: #f8f8f8;
+      border: 1px solid #333;
       border-radius: 6px;
-      padding: 10px;
-      margin-top: 20px;
+      padding: 15px;
+      margin: 20px 0;
       font-family: monospace;
       font-size: 0.9rem;
       white-space: pre-wrap;
+      line-height: 1.4;
+    }
+    .sync-log-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #444;
+    }
+    .sync-log-title {
+      font-weight: bold;
+      color: #fff;
+      margin: 0;
+    }
+    .sync-log-controls {
+      display: flex;
+      gap: 10px;
+    }
+    .sync-log-clear {
+      background-color: #555;
+      color: white;
+      border: none;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+    .sync-log-clear:hover {
+      background-color: #777;
     }
     .error-message {
       background-color: #fee2e2;
@@ -211,7 +242,15 @@ const HTML_TEMPLATE = `
     <span>正在同步仓库，请稍候...</span>
   </div>
   
-  <div id="syncLog" class="sync-log" style="display: none;"></div>
+  <div id="syncLogContainer" style="display: none;">
+    <div class="sync-log-header">
+      <h3 class="sync-log-title">同步日志</h3>
+      <div class="sync-log-controls">
+        <button class="sync-log-clear" onclick="clearSyncLog()">清空日志</button>
+      </div>
+    </div>
+    <div id="syncLog" class="sync-log"></div>
+  </div>
   
   <table>
     <thead>
@@ -238,109 +277,130 @@ const HTML_TEMPLATE = `
     function triggerSyncAll() {
       const syncAllButton = document.getElementById('syncAllButton');
       const syncStatus = document.getElementById('syncStatus');
+      const syncLogContainer = document.getElementById('syncLogContainer');
       const syncLog = document.getElementById('syncLog');
       
       syncAllButton.disabled = true;
       syncStatus.style.display = 'flex';
-      syncLog.style.display = 'block';
+      syncLogContainer.style.display = 'block';
       syncLog.innerHTML = '开始同步所有仓库...\\n';
       
-      // 直接连接同步请求，监听事件流
-      const evtSource = new EventSource('/sync');
-      
-      evtSource.onmessage = function(event) {
-        const logEntry = event.data;
-        syncLog.innerHTML += logEntry + '\\n';
-        syncLog.scrollTop = syncLog.scrollHeight;
-        
-        // 检查是否同步完成或失败
-        if (logEntry.includes('所有同步任务完成') || 
-            logEntry.includes('同步过程中出错') || 
-            logEntry.includes('同步失败')) {
+      fetch('/sync')
+        .then(function(response) {
+          if (!response.body) {
+            throw new Error('浏览器不支持流式响应');
+          }
           
-          // 添加自动刷新倒计时
-          syncLog.innerHTML += '\\n同步已完成，3秒后自动刷新页面...\\n';
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder('utf-8');
           
-          setTimeout(function() {
-            evtSource.close();
-            window.location.reload();
-          }, 3000);
-        }
-      };
-      
-      evtSource.onerror = function() {
-        syncLog.innerHTML += '\\n日志流连接中断，请刷新页面查看最新状态...\\n';
-        evtSource.close();
-        
-        // 如果连接断开，5秒后自动刷新
-        setTimeout(function() {
-          window.location.reload();
-        }, 5000);
-      };
+          function readStream() {
+            reader.read().then(function(result) {
+              if (result.done) {
+                syncLog.innerHTML += '\\n同步已完成，3秒后自动刷新页面...\\n';
+                setTimeout(function() { window.location.reload(); }, 3000);
+                return;
+              }
+              
+              const text = decoder.decode(result.value, { stream: true });
+              syncLog.innerHTML += text;
+              syncLog.scrollTop = syncLog.scrollHeight;
+              
+              if (text.includes('所有同步任务完成') || 
+                  text.includes('同步过程中出错') || 
+                  text.includes('同步失败')) {
+                syncLog.innerHTML += '\\n同步已完成，3秒后自动刷新页面...\\n';
+                setTimeout(function() { window.location.reload(); }, 3000);
+                return;
+              }
+              
+              readStream();
+            }).catch(function(error) {
+              syncLog.innerHTML += '\\n日志流读取错误: ' + error.message + '\\n请刷新页面查看最新状态...\\n';
+              setTimeout(function() { window.location.reload(); }, 5000);
+            });
+          }
+          
+          readStream();
+        })
+        .catch(function(error) {
+          syncLog.innerHTML += '\\n启动同步失败: ' + error.message + '\\n请检查网络连接或刷新页面重试...\\n';
+          syncAllButton.disabled = false;
+        });
     }
     
     function triggerSyncRepo(repo) {
-      const repoRow = document.getElementById('repo-' + repo.replace('/', '-'));
-      const syncButton = document.getElementById('sync-' + repo.replace('/', '-'));
-      const syncRowStatus = document.getElementById('sync-status-' + repo.replace('/', '-'));
+      const repoId = repo.replace('/', '-');
+      const syncButton = document.getElementById('sync-' + repoId);
+      const syncRowStatus = document.getElementById('sync-status-' + repoId);
+      const syncLogContainer = document.getElementById('syncLogContainer');
       const syncLog = document.getElementById('syncLog');
       
       syncButton.disabled = true;
       syncRowStatus.style.display = 'block';
-      syncLog.style.display = 'block';
+      syncLogContainer.style.display = 'block';
       syncLog.innerHTML = '开始同步仓库: ' + repo + '...\\n';
       
-      // 直接连接同步请求，监听事件流
-      const evtSource = new EventSource('/sync?repo=' + encodeURIComponent(repo));
-      
-      evtSource.onmessage = function(event) {
-        const logEntry = event.data;
-        syncLog.innerHTML += logEntry + '\\n';
-        syncLog.scrollTop = syncLog.scrollHeight;
-        
-        // 检查是否同步完成或失败
-        if (logEntry.includes('同步完成') || 
-            logEntry.includes('同步过程中出错') || 
-            logEntry.includes('同步失败')) {
+      fetch('/sync?repo=' + encodeURIComponent(repo))
+        .then(function(response) {
+          if (!response.body) {
+            throw new Error('浏览器不支持流式响应');
+          }
           
-          // 添加自动刷新倒计时
-          syncLog.innerHTML += '\\n同步已完成，3秒后自动刷新页面...\\n';
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder('utf-8');
           
-          setTimeout(function() {
-            evtSource.close();
-            window.location.reload();
-          }, 3000);
-        }
-      };
-      
-      evtSource.onerror = function() {
-        syncLog.innerHTML += '\\n日志流连接中断，请刷新页面查看最新状态...\\n';
-        evtSource.close();
-        
-        // 如果连接断开，5秒后自动刷新
-        setTimeout(function() {
-          window.location.reload();
-        }, 5000);
-      };
+          function readStream() {
+            reader.read().then(function(result) {
+              if (result.done) {
+                syncLog.innerHTML += '\\n同步已完成，3秒后自动刷新页面...\\n';
+                setTimeout(function() { window.location.reload(); }, 3000);
+                return;
+              }
+              
+              const text = decoder.decode(result.value, { stream: true });
+              syncLog.innerHTML += text;
+              syncLog.scrollTop = syncLog.scrollHeight;
+              
+              if (text.includes('同步完成') || 
+                  text.includes('同步过程中出错') || 
+                  text.includes('同步失败')) {
+                syncLog.innerHTML += '\\n同步已完成，3秒后自动刷新页面...\\n';
+                setTimeout(function() { window.location.reload(); }, 3000);
+                return;
+              }
+              
+              readStream();
+            }).catch(function(error) {
+              syncLog.innerHTML += '\\n日志流读取错误: ' + error.message + '\\n请刷新页面查看最新状态...\\n';
+              setTimeout(function() { window.location.reload(); }, 5000);
+            });
+          }
+          
+          readStream();
+        })
+        .catch(function(error) {
+          syncLog.innerHTML += '\\n启动同步失败: ' + error.message + '\\n请检查网络连接或刷新页面重试...\\n';
+          syncButton.disabled = false;
+        });
     }
     
-    // 添加页面定时刷新功能，防止同步状态显示不更新
-    let pageIdleTime = 0;
-    const maxIdleTime = 60; // 60秒自动刷新一次
+    function clearSyncLog() {
+      document.getElementById('syncLog').innerHTML = '';
+    }
     
-    // 每秒检查一次是否需要刷新页面
+    let pageIdleTime = 0;
+    const maxIdleTime = 60;
+    
     setInterval(function() {
-      // 如果页面显示正在同步，但实际上可能已经完成或超时
       if (document.getElementById('syncStatus').style.display === 'flex') {
         pageIdleTime++;
         
-        // 超过最大空闲时间，自动刷新
         if (pageIdleTime >= maxIdleTime) {
           console.log('同步状态长时间未更新，自动刷新页面');
           window.location.reload();
         }
       } else {
-        // 重置计时器
         pageIdleTime = 0;
       }
     }, 1000);
@@ -700,7 +760,7 @@ export default {
 
     return new Response(stream.readable, {
       headers: {
-        'Content-Type': 'text/event-stream',
+        'Content-Type': 'text/event-stream; charset=utf-8',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive'
       }

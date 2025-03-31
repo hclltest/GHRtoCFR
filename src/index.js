@@ -31,12 +31,6 @@ const HTML_TEMPLATE = `
       margin-bottom: 30px;
       color: #2563eb;
     }
-    .action-bar {
-      display: flex;
-      justify-content: center;
-      margin-bottom: 25px;
-      gap: 15px;
-    }
     .btn {
       background-color: #2563eb;
       color: white;
@@ -106,7 +100,7 @@ const HTML_TEMPLATE = `
       overflow: hidden;
       box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
       background-color: #1a1a1a;
-      height: 250px;
+      height: 500px;
       display: flex;
       flex-direction: column;
     }
@@ -149,6 +143,22 @@ const HTML_TEMPLATE = `
     }
     .sync-log-clear:hover {
       background-color: #777;
+    }
+    .sync-all-btn {
+      background-color: #2563eb;
+      color: white;
+      border: none;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+    .sync-all-btn:hover {
+      background-color: #1d4ed8;
+    }
+    .sync-all-btn:disabled {
+      background-color: #93c5fd;
+      cursor: not-allowed;
     }
     .error-message {
       background-color: #fee2e2;
@@ -193,41 +203,14 @@ const HTML_TEMPLATE = `
     .api-reset {
       font-style: italic;
     }
-    .sync-status {
-      display: none;
-      align-items: center;
-      gap: 10px;
-      background-color: #dbeafe;
-      color: #1e40af;
-      padding: 15px;
-      border-radius: 8px;
-      margin: 20px auto;
-      max-width: 600px;
-      text-align: center;
-    }
-    .spinner {
-      border: 3px solid rgba(0, 0, 0, 0.1);
-      border-radius: 50%;
-      border-top: 3px solid #2563eb;
-      width: 20px;
-      height: 20px;
-      animation: spin 1s linear infinite;
-      display: inline-block;
-    }
-    .sync-row-status {
-      display: none;
-      font-size: 0.85rem;
-      margin-top: 5px;
-    }
     .refresh-btn {
       background-color: #4b5563;
       color: white;
       border: none;
-      padding: 6px 12px;
+      padding: 4px 8px;
       border-radius: 4px;
       cursor: pointer;
       font-size: 0.8rem;
-      margin-left: 10px;
     }
     .refresh-btn:hover {
       background-color: #374151;
@@ -253,16 +236,6 @@ const HTML_TEMPLATE = `
   {{ERROR_MESSAGE}}
   {{INFO_MESSAGE}}
   
-  <div class="action-bar">
-    <button id="syncAllButton" class="btn" onclick="triggerSyncAll()">同步所有仓库</button>
-    <button id="refreshStatusButton" class="btn" onclick="refreshStatus()">刷新状态</button>
-  </div>
-  
-  <div id="syncStatus" class="sync-status">
-    <div class="spinner"></div>
-    <span>正在同步仓库，请稍候...</span>
-  </div>
-  
   <table>
     <thead>
       <tr>
@@ -283,8 +256,9 @@ const HTML_TEMPLATE = `
     <div class="sync-log-header">
       <h3 class="sync-log-title">同步日志</h3>
       <div class="sync-log-controls">
+        <button class="sync-all-btn" id="syncAllButton" onclick="triggerSyncAll()">同步所有仓库</button>
         <button class="sync-log-clear" onclick="clearSyncLog()">清空日志</button>
-        <button class="refresh-btn" onclick="refreshStatus()">仅刷新状态</button>
+        <button class="refresh-btn" onclick="refreshStatus()">刷新状态</button>
       </div>
     </div>
     <div id="syncLog" class="sync-log"></div>
@@ -298,11 +272,9 @@ const HTML_TEMPLATE = `
   <script>
     function triggerSyncAll() {
       const syncAllButton = document.getElementById('syncAllButton');
-      const syncStatus = document.getElementById('syncStatus');
       const syncLog = document.getElementById('syncLog');
       
       syncAllButton.disabled = true;
-      syncStatus.style.display = 'flex';
       syncLog.innerHTML += '开始同步所有仓库...\\n';
       
       fetch('/sync')
@@ -368,13 +340,9 @@ const HTML_TEMPLATE = `
     function triggerSyncRepo(repo) {
       const repoId = repo.replace('/', '-');
       const syncButton = document.getElementById('sync-' + repoId);
-      const syncRowStatus = document.getElementById('sync-status-' + repoId);
-      const syncStatus = document.getElementById('syncStatus');
       const syncLog = document.getElementById('syncLog');
       
       syncButton.disabled = true;
-      syncRowStatus.style.display = 'block';
-      syncStatus.style.display = 'flex';
       syncLog.innerHTML += '开始同步仓库: ' + repo + '...\\n';
       
       fetch('/sync?repo=' + encodeURIComponent(repo))
@@ -442,7 +410,6 @@ const HTML_TEMPLATE = `
     // 只刷新状态，不刷新整个页面或清空日志
     function refreshStatus() {
       const syncAllButton = document.getElementById('syncAllButton');
-      const syncStatus = document.getElementById('syncStatus');
       const syncLog = document.getElementById('syncLog');
       
       // 从API获取最新状态
@@ -510,14 +477,9 @@ const HTML_TEMPLATE = `
                 
                 // 更新同步按钮状态
                 const syncButton = document.getElementById('sync-' + repoId);
-                const syncRowStatus = document.getElementById('sync-status-' + repoId);
                 
                 if (syncButton && repo.status !== "syncing") {
                   syncButton.disabled = false;
-                }
-                
-                if (syncRowStatus) {
-                  syncRowStatus.style.display = repo.status === "syncing" ? 'block' : 'none';
                 }
               }
             });
@@ -526,7 +488,6 @@ const HTML_TEMPLATE = `
           // 更新全局同步状态
           if (!data.isSyncing) {
             syncAllButton.disabled = false;
-            syncStatus.style.display = 'none';
           }
           
           // 添加更新成功日志
@@ -543,7 +504,9 @@ const HTML_TEMPLATE = `
     const maxIdleTime = 60;
     
     setInterval(function() {
-      if (document.getElementById('syncStatus').style.display === 'flex') {
+      const syncAllButton = document.getElementById('syncAllButton');
+      
+      if (syncAllButton.disabled) {
         pageIdleTime++;
         
         if (pageIdleTime >= maxIdleTime) {
@@ -1557,10 +1520,6 @@ export default {
             <td><span class="status ${statusClass}" title="${repo.message || ''}">${statusText}</span></td>
             <td>
               <button id="sync-${repoId}" class="btn btn-sm" onclick="triggerSyncRepo('${repo.repo}')">同步</button>
-              <div id="sync-status-${repoId}" class="sync-row-status">
-                <div class="spinner" style="width: 12px; height: 12px;"></div>
-                <span>同步中...</span>
-              </div>
             </td>
           </tr>
         `;
@@ -1640,8 +1599,6 @@ export default {
       html = html.replace('</script>', `
         document.addEventListener('DOMContentLoaded', function() {
           document.getElementById('syncAllButton').disabled = true;
-          document.getElementById('syncStatus').style.display = 'flex';
-          document.getElementById('syncLog').style.display = 'block';
         });
       </script>`);
     }

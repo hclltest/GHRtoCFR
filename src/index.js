@@ -666,6 +666,9 @@ export default {
                 continue;
               }
               
+              // 同步之前先清空旧的filePaths，防止数据混淆
+              await this.clearFilePathsList(env, repo);
+              
               // 只有需要更新时才删除旧文件
               await writer.write(encoder.encode(`正在删除 ${repo} 的旧文件...\n`));
               await this.deleteRepoFiles(env, repo);
@@ -698,6 +701,9 @@ export default {
                 Other: 0
               };
               
+              // 保存已确认属于此仓库的文件路径
+              const confirmedFilePaths = [];
+              
               let uploadedCount = 0;
               for (let i = 0; i < validAssets.length; i++) {
                 const asset = validAssets[i];
@@ -709,6 +715,7 @@ export default {
                   if (uploadedPath) {  // 只有实际上传成功的文件才计数
                     platformCounts[platform]++;
                     uploadedCount++;
+                    confirmedFilePaths.push(uploadedPath);
                     await writer.write(encoder.encode(`成功上传: ${asset.name} → ${platform}\n`));
                   } else {
                     await writer.write(encoder.encode(`跳过: ${asset.name}，不属于当前仓库\n`));
@@ -725,7 +732,7 @@ export default {
                 lastUpdate: new Date().toISOString(),
                 status: 'synced',
                 path,
-                filePaths: [] // 初始化一个空的文件路径数组，会在文件上传时填充
+                filePaths: confirmedFilePaths // 使用确认的文件路径列表
               };
               await this.saveVersionInfo(env, repo, syncedRepo);
               
@@ -765,6 +772,35 @@ export default {
         'Connection': 'keep-alive'
       }
     });
+  },
+
+  /**
+   * 清空仓库的文件路径列表
+   */
+  async clearFilePathsList(env, repo) {
+    if (!env.SYNC_STATUS) {
+      console.error('KV存储未绑定，无法清空文件路径列表');
+      return;
+    }
+    
+    try {
+      const repoKey = `repo:${repo}`;
+      const versionInfoStr = await env.SYNC_STATUS.get(repoKey);
+      
+      if (versionInfoStr) {
+        const versionInfo = JSON.parse(versionInfoStr);
+        
+        // 清空文件路径列表，但保留其他信息
+        versionInfo.filePaths = [];
+        versionInfo.status = 'syncing'; // 更新状态为正在同步
+        versionInfo.lastUpdate = new Date().toISOString();
+        
+        await env.SYNC_STATUS.put(repoKey, JSON.stringify(versionInfo));
+        console.log(`已清空 ${repo} 的文件路径列表`);
+      }
+    } catch (error) {
+      console.error(`清空文件路径列表失败: ${error.message}`);
+    }
   },
 
   /**
@@ -1066,11 +1102,20 @@ export default {
               versionInfo.filePaths = [];
             }
             
-            // 避免重复添加同一路径
-            if (!versionInfo.filePaths.includes(storagePath)) {
-              versionInfo.filePaths.push(storagePath);
-              await env.SYNC_STATUS.put(repoKey, JSON.stringify(versionInfo));
-              console.log(`已将 ${storagePath} 添加到 ${repo} 的文件路径记录中，现有 ${versionInfo.filePaths.length} 个文件`);
+            // 对比文件名，确保只添加属于当前仓库的文件
+            const uploadedFileName = storagePath.split('/').pop();
+            const repoBaseName = repo.split('/')[1].toLowerCase();
+            
+            // 额外验证确保文件确实属于当前仓库
+            if (this.isFileFromRepo(storagePath, repo)) {
+              // 避免重复添加同一路径
+              if (!versionInfo.filePaths.includes(storagePath)) {
+                versionInfo.filePaths.push(storagePath);
+                await env.SYNC_STATUS.put(repoKey, JSON.stringify(versionInfo));
+                console.log(`已将 ${storagePath} 添加到 ${repo} 的文件路径记录中，现有 ${versionInfo.filePaths.length} 个文件`);
+              }
+            } else {
+              console.warn(`跳过添加可能不属于仓库 ${repo} 的文件路径: ${storagePath}`);
             }
           } else {
             // 如果KV中没有信息，创建一个初始记录
@@ -1704,6 +1749,26 @@ export default {
               await env.SYNC_STATUS.put(repoKey, JSON.stringify(updatedInfo));
             }
             
+            // 检查如果状态为syncing但时间超过20分钟，则重置为error状态
+            if (versionInfo.status === 'syncing' && versionInfo.lastUpdate) {
+              const lastUpdateTime = new Date(versionInfo.lastUpdate).getTime();
+              const currentTime = new Date().getTime();
+              const timeDiff = currentTime - lastUpdateTime;
+              
+              // 如果同步状态超过20分钟，认为同步失败
+              if (timeDiff > 20 * 60 * 1000) {
+                console.log(`${repo} 的同步状态已持续超过20分钟，重置为错误状态`);
+                
+                const updatedInfo = {
+                  ...versionInfo,
+                  status: 'error',
+                  message: '同步超时，请重试'
+                };
+                
+                await env.SYNC_STATUS.put(repoKey, JSON.stringify(updatedInfo));
+              }
+            }
+            
             // 检查文件路径是否为空，但状态为已同步
             if (versionInfo.status === 'synced' && 
                 (!versionInfo.filePaths || versionInfo.filePaths.length === 0)) {
@@ -1773,18 +1838,30 @@ export default {
                 
                 // 处理状态映射，确保前端显示正确
                 let status = versionInfo.status || "latest";
-                // 如果状态是synced，在前端将映射为latest
+                let message = "";
+                
+                // 根据状态设置前端显示的消息
                 if (status === "synced") {
-                  status = "latest";
+                  status = "latest"; // 在前端将synced映射为latest
+                  message = "当前已是最新版本";
+                } else if (status === "error") {
+                  message = versionInfo.error || "同步失败";
+                } else if (status === "syncing") {
+                  message = "正在同步中...";
+                } else if (status === "pending") {
+                  message = "等待同步";
                 }
+                
+                // 确保版本信息存在
+                const version = versionInfo.version || "未知";
                 
                 updatedRepos.push({
                   repo: config.repo,
-                  version: versionInfo.version || "未知",
-                  date: versionInfo.updatedAt || versionInfo.lastUpdate || "-",
+                  version: version,
+                  date: versionInfo.lastUpdate || "-",
                   path: config.path,
                   status: status,
-                  message: versionInfo.error || "当前已是最新版本"
+                  message: message
                 });
               } else {
                 // 未同步过，创建临时记录

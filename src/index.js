@@ -100,26 +100,33 @@ const HTML_TEMPLATE = `
       background-color: #fee2e2;
       color: #dc2626;
     }
-    .sync-log {
-      max-height: 300px;
-      overflow-y: auto;
-      background-color: #1a1a1a;
-      color: #f8f8f8;
-      border: 1px solid #333;
-      border-radius: 6px;
-      padding: 15px;
+    .sync-log-container {
       margin: 20px 0;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      background-color: #1a1a1a;
+      height: 250px;
+      display: flex;
+      flex-direction: column;
+    }
+    .sync-log {
+      flex: 1;
+      overflow-y: auto;
+      color: #f8f8f8;
+      padding: 15px;
       font-family: monospace;
       font-size: 0.9rem;
       white-space: pre-wrap;
       line-height: 1.4;
+      background-color: #1a1a1a;
     }
     .sync-log-header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 10px;
-      padding-bottom: 10px;
+      padding: 10px 15px;
+      background-color: #2c2c2c;
       border-bottom: 1px solid #444;
     }
     .sync-log-title {
@@ -272,7 +279,7 @@ const HTML_TEMPLATE = `
     </tbody>
   </table>
   
-  <div id="syncLogContainer" style="display: none;">
+  <div id="syncLogContainer" class="sync-log-container">
     <div class="sync-log-header">
       <h3 class="sync-log-title">同步日志</h3>
       <div class="sync-log-controls">
@@ -292,12 +299,10 @@ const HTML_TEMPLATE = `
     function triggerSyncAll() {
       const syncAllButton = document.getElementById('syncAllButton');
       const syncStatus = document.getElementById('syncStatus');
-      const syncLogContainer = document.getElementById('syncLogContainer');
       const syncLog = document.getElementById('syncLog');
       
       syncAllButton.disabled = true;
       syncStatus.style.display = 'flex';
-      syncLogContainer.style.display = 'block';
       syncLog.innerHTML += '开始同步所有仓库...\\n';
       
       fetch('/sync')
@@ -364,12 +369,12 @@ const HTML_TEMPLATE = `
       const repoId = repo.replace('/', '-');
       const syncButton = document.getElementById('sync-' + repoId);
       const syncRowStatus = document.getElementById('sync-status-' + repoId);
-      const syncLogContainer = document.getElementById('syncLogContainer');
+      const syncStatus = document.getElementById('syncStatus');
       const syncLog = document.getElementById('syncLog');
       
       syncButton.disabled = true;
       syncRowStatus.style.display = 'block';
-      syncLogContainer.style.display = 'block';
+      syncStatus.style.display = 'flex';
       syncLog.innerHTML += '开始同步仓库: ' + repo + '...\\n';
       
       fetch('/sync?repo=' + encodeURIComponent(repo))

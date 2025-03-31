@@ -212,6 +212,19 @@ const HTML_TEMPLATE = `
       font-size: 0.85rem;
       margin-top: 5px;
     }
+    .refresh-btn {
+      background-color: #4b5563;
+      color: white;
+      border: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      margin-left: 10px;
+    }
+    .refresh-btn:hover {
+      background-color: #374151;
+    }
     @keyframes spin {
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
@@ -235,21 +248,12 @@ const HTML_TEMPLATE = `
   
   <div class="action-bar">
     <button id="syncAllButton" class="btn" onclick="triggerSyncAll()">同步所有仓库</button>
+    <button id="refreshStatusButton" class="btn" onclick="refreshStatus()">刷新状态</button>
   </div>
   
   <div id="syncStatus" class="sync-status">
     <div class="spinner"></div>
     <span>正在同步仓库，请稍候...</span>
-  </div>
-  
-  <div id="syncLogContainer" style="display: none;">
-    <div class="sync-log-header">
-      <h3 class="sync-log-title">同步日志</h3>
-      <div class="sync-log-controls">
-        <button class="sync-log-clear" onclick="clearSyncLog()">清空日志</button>
-      </div>
-    </div>
-    <div id="syncLog" class="sync-log"></div>
   </div>
   
   <table>
@@ -268,6 +272,17 @@ const HTML_TEMPLATE = `
     </tbody>
   </table>
   
+  <div id="syncLogContainer" style="display: none;">
+    <div class="sync-log-header">
+      <h3 class="sync-log-title">同步日志</h3>
+      <div class="sync-log-controls">
+        <button class="sync-log-clear" onclick="clearSyncLog()">清空日志</button>
+        <button class="refresh-btn" onclick="refreshStatus()">仅刷新状态</button>
+      </div>
+    </div>
+    <div id="syncLog" class="sync-log"></div>
+  </div>
+  
   <div class="footer">
     <div class="last-check">最后检查时间: {{LAST_CHECK_TIME}}</div>
     <div class="api-info">{{API_RATE_LIMIT}}</div>
@@ -283,7 +298,7 @@ const HTML_TEMPLATE = `
       syncAllButton.disabled = true;
       syncStatus.style.display = 'flex';
       syncLogContainer.style.display = 'block';
-      syncLog.innerHTML = '开始同步所有仓库...\\n';
+      syncLog.innerHTML += '开始同步所有仓库...\\n';
       
       fetch('/sync')
         .then(function(response) {
@@ -302,8 +317,8 @@ const HTML_TEMPLATE = `
             reader.read().then(function(result) {
               if (result.done) {
                 if (!syncComplete) {
-                  syncLog.innerHTML += '\\n读取同步日志流结束，但未收到完成信号。5秒后自动刷新页面...\\n';
-                  setTimeout(function() { window.location.reload(); }, 5000);
+                  syncLog.innerHTML += '\\n读取同步日志流结束，但未收到完成信号。5秒后自动刷新仓库状态...\\n';
+                  setTimeout(function() { refreshStatus(); }, 5000);
                 }
                 return;
               }
@@ -316,16 +331,16 @@ const HTML_TEMPLATE = `
               if (text.includes('所有同步任务完成')) {
                 syncComplete = true;
                 allReposComplete = true;
-                syncLog.innerHTML += '\\n所有仓库同步完成！3秒后自动刷新页面...\\n';
-                setTimeout(function() { window.location.reload(); }, 3000);
+                syncLog.innerHTML += '\\n所有仓库同步完成！3秒后自动刷新仓库状态...\\n';
+                setTimeout(function() { refreshStatus(); }, 3000);
                 return;
               }
               
               // 检查是否有错误信号
               if (text.includes('同步过程中出错')) {
                 syncComplete = true;
-                syncLog.innerHTML += '\\n同步过程中出错。5秒后自动刷新页面...\\n';
-                setTimeout(function() { window.location.reload(); }, 5000);
+                syncLog.innerHTML += '\\n同步过程中出错。5秒后自动刷新仓库状态...\\n';
+                setTimeout(function() { refreshStatus(); }, 5000);
                 return;
               }
               
@@ -333,7 +348,7 @@ const HTML_TEMPLATE = `
               readStream();
             }).catch(function(error) {
               syncLog.innerHTML += '\\n日志流读取错误: ' + error.message + '\\n请手动刷新页面查看最新状态...\\n';
-              setTimeout(function() { window.location.reload(); }, 5000);
+              setTimeout(function() { refreshStatus(); }, 5000);
             });
           }
           
@@ -355,7 +370,7 @@ const HTML_TEMPLATE = `
       syncButton.disabled = true;
       syncRowStatus.style.display = 'block';
       syncLogContainer.style.display = 'block';
-      syncLog.innerHTML = '开始同步仓库: ' + repo + '...\\n';
+      syncLog.innerHTML += '开始同步仓库: ' + repo + '...\\n';
       
       fetch('/sync?repo=' + encodeURIComponent(repo))
         .then(function(response) {
@@ -373,8 +388,8 @@ const HTML_TEMPLATE = `
             reader.read().then(function(result) {
               if (result.done) {
                 if (!syncComplete) {
-                  syncLog.innerHTML += '\\n读取同步日志流结束，但未收到完成信号。5秒后自动刷新页面...\\n';
-                  setTimeout(function() { window.location.reload(); }, 5000);
+                  syncLog.innerHTML += '\\n读取同步日志流结束，但未收到完成信号。5秒后自动刷新仓库状态...\\n';
+                  setTimeout(function() { refreshStatus(); }, 5000);
                 }
                 return;
               }
@@ -386,16 +401,16 @@ const HTML_TEMPLATE = `
               // 检查是否包含该仓库的完成信号
               if (text.includes(repo + ' 同步完成')) {
                 syncComplete = true;
-                syncLog.innerHTML += '\\n仓库 ' + repo + ' 同步完成！3秒后自动刷新页面...\\n';
-                setTimeout(function() { window.location.reload(); }, 3000);
+                syncLog.innerHTML += '\\n仓库 ' + repo + ' 同步完成！3秒后自动刷新仓库状态...\\n';
+                setTimeout(function() { refreshStatus(); }, 3000);
                 return;
               }
               
               // 检查是否有错误信号
               if (text.includes('同步 ' + repo + ' 时出错') || text.includes('同步过程中出错')) {
                 syncComplete = true;
-                syncLog.innerHTML += '\\n仓库 ' + repo + ' 同步出错。5秒后自动刷新页面...\\n';
-                setTimeout(function() { window.location.reload(); }, 5000);
+                syncLog.innerHTML += '\\n仓库 ' + repo + ' 同步出错。5秒后自动刷新仓库状态...\\n';
+                setTimeout(function() { refreshStatus(); }, 5000);
                 return;
               }
               
@@ -403,7 +418,7 @@ const HTML_TEMPLATE = `
               readStream();
             }).catch(function(error) {
               syncLog.innerHTML += '\\n日志流读取错误: ' + error.message + '\\n请手动刷新页面查看最新状态...\\n';
-              setTimeout(function() { window.location.reload(); }, 5000);
+              setTimeout(function() { refreshStatus(); }, 5000);
             });
           }
           
@@ -419,6 +434,106 @@ const HTML_TEMPLATE = `
       document.getElementById('syncLog').innerHTML = '';
     }
     
+    // 只刷新状态，不刷新整个页面或清空日志
+    function refreshStatus() {
+      const syncAllButton = document.getElementById('syncAllButton');
+      const syncStatus = document.getElementById('syncStatus');
+      const syncLog = document.getElementById('syncLog');
+      
+      // 从API获取最新状态
+      fetch('/api/status')
+        .then(response => response.json())
+        .then(data => {
+          // 更新仓库状态表格
+          if (data.repos && data.repos.length > 0) {
+            data.repos.forEach(repo => {
+              const repoId = repo.repo.replace('/', '-');
+              const row = document.getElementById('repo-' + repoId);
+              
+              if (row) {
+                // 更新版本
+                row.cells[1].textContent = repo.version;
+                
+                // 更新日期
+                if (repo.date && repo.date !== "-") {
+                  try {
+                    const date = new Date(repo.date);
+                    row.cells[2].textContent = date.toLocaleString('zh-CN', {
+                      year: 'numeric', month: 'numeric', day: 'numeric',
+                      hour: '2-digit', minute: '2-digit', second: '2-digit',
+                      hour12: false
+                    });
+                  } catch (e) {
+                    row.cells[2].textContent = repo.date;
+                  }
+                }
+                
+                // 更新状态
+                const statusCell = row.cells[4].querySelector('.status');
+                if (statusCell) {
+                  // 移除旧的状态类
+                  statusCell.classList.remove('status-success', 'status-pending', 'status-error');
+                  
+                  // 添加新的状态类和文本
+                  let statusClass = "";
+                  let statusText = "";
+                  
+                  if (repo.status === "error") {
+                    statusClass = "status-error";
+                    statusText = "失败";
+                  } else if (repo.status === "updated" || repo.status === "latest" || repo.status === "synced") {
+                    statusClass = "status-success";
+                    statusText = "最新";
+                  } else if (repo.status === "pending") {
+                    statusClass = "status-pending";
+                    statusText = "待同步";
+                  } else if (repo.status === "syncing") {
+                    statusClass = "status-pending";
+                    statusText = "同步中";
+                  } else {
+                    statusClass = "status-pending";
+                    statusText = repo.status || "未知";
+                  }
+                  
+                  statusCell.classList.add(statusClass);
+                  statusCell.textContent = statusText;
+                  
+                  if (repo.message) {
+                    statusCell.title = repo.message;
+                  }
+                }
+                
+                // 更新同步按钮状态
+                const syncButton = document.getElementById('sync-' + repoId);
+                const syncRowStatus = document.getElementById('sync-status-' + repoId);
+                
+                if (syncButton && repo.status !== "syncing") {
+                  syncButton.disabled = false;
+                }
+                
+                if (syncRowStatus) {
+                  syncRowStatus.style.display = repo.status === "syncing" ? 'block' : 'none';
+                }
+              }
+            });
+          }
+          
+          // 更新全局同步状态
+          if (!data.isSyncing) {
+            syncAllButton.disabled = false;
+            syncStatus.style.display = 'none';
+          }
+          
+          // 添加更新成功日志
+          syncLog.innerHTML += '\\n[' + new Date().toLocaleTimeString() + '] 已刷新仓库状态\\n';
+          syncLog.scrollTop = syncLog.scrollHeight;
+        })
+        .catch(error => {
+          syncLog.innerHTML += '\\n刷新状态失败: ' + error.message + '\\n';
+          syncLog.scrollTop = syncLog.scrollHeight;
+        });
+    }
+    
     let pageIdleTime = 0;
     const maxIdleTime = 60;
     
@@ -427,8 +542,9 @@ const HTML_TEMPLATE = `
         pageIdleTime++;
         
         if (pageIdleTime >= maxIdleTime) {
-          console.log('同步状态长时间未更新，自动刷新页面');
-          window.location.reload();
+          console.log('同步状态长时间未更新，自动刷新仓库状态');
+          refreshStatus();
+          pageIdleTime = 0;
         }
       } else {
         pageIdleTime = 0;
@@ -931,61 +1047,84 @@ export default {
             return true;
           }
           
-          // 如果存储路径没变，检查文件是否存在
-          if (storedVersionInfo.filePaths && 
-              Array.isArray(storedVersionInfo.filePaths) && 
-              storedVersionInfo.filePaths.length === 0 && 
-              storedVersionInfo.status === 'synced') {
-            console.log(`${repo} 的文件路径记录为空，可能未正确同步，需要重新同步`);
-            return true;
+          // 获取该仓库在GitHub的最新发布信息，以检查文件数量
+          let expectedAssetCount = 0;
+          try {
+            const releaseInfo = await this.fetchLatestRelease(repo, env);
+            if (releaseInfo && releaseInfo.assets) {
+              const validAssets = releaseInfo.assets.filter(asset => {
+                return !asset.name.includes("Source code") &&
+                       !asset.name.endsWith(".sha256") &&
+                       !asset.name.endsWith(".asc");
+              });
+              expectedAssetCount = validAssets.length;
+              console.log(`${repo} 在GitHub最新版本中有 ${expectedAssetCount} 个有效资源文件`);
+            }
+          } catch (error) {
+            console.error(`获取GitHub最新发布信息失败: ${error.message}`);
+            // 如果无法获取GitHub信息，我们将继续使用已有的版本比较逻辑
           }
           
-          // 如果KV中已有版本信息，直接比较版本
-          if (storedVersionInfo.version === currentVersion) {
-            // 额外检查：如果文件路径记录为空，但状态为synced，可能需要重新同步
-            if (storedVersionInfo.filePaths && 
-                Array.isArray(storedVersionInfo.filePaths) && 
-                storedVersionInfo.filePaths.length === 0 && 
-                storedVersionInfo.status === 'synced') {
-              // 检查R2中是否有实际文件
-              let hasFiles = false;
-              if (env.R2_BUCKET) {
-                try {
-                  // 构建基本的路径前缀
-                  const prefix = path && path.startsWith("/") ? path.substring(1) : path;
-                  const basePath = prefix ? `${prefix}/` : "";
-                  const objects = await env.R2_BUCKET.list({ prefix: basePath });
-                  // 如果在R2中找不到对应路径的文件，需要重新同步
-                  if (!objects || !objects.objects || objects.objects.length === 0) {
-                    console.log(`${repo} 在R2中未找到文件，需要重新同步`);
-                    return true;
-                  }
-                  
-                  // 过滤这个仓库的文件
-                  const repoFiles = objects.objects.filter(obj => this.isFileFromRepo(obj.key, repo));
-                  if (repoFiles.length === 0) {
-                    console.log(`${repo} 在R2中未找到与该仓库相关的文件，需要重新同步`);
-                    return true;
-                  }
-                  
-                  hasFiles = true;
-                  // 更新文件路径记录
+          // 检查文件是否存在于R2中
+          let actualFileCount = 0;
+          let hasCompleteFiles = false;
+          
+          if (env.R2_BUCKET) {
+            try {
+              // 构建基本的路径前缀
+              const prefix = path && path.startsWith("/") ? path.substring(1) : path;
+              const basePath = prefix ? `${prefix}/` : "";
+              const objects = await env.R2_BUCKET.list({ prefix: basePath });
+              
+              if (objects && objects.objects && objects.objects.length > 0) {
+                // 过滤这个仓库的文件
+                const repoFiles = objects.objects.filter(obj => this.isFileFromRepo(obj.key, repo));
+                actualFileCount = repoFiles.length;
+                
+                // 更新文件路径记录
+                if (repoFiles.length > 0 && (!storedVersionInfo.filePaths || storedVersionInfo.filePaths.length !== repoFiles.length)) {
                   const updatedVersionInfo = { ...storedVersionInfo };
                   updatedVersionInfo.filePaths = repoFiles.map(obj => obj.key);
                   await env.SYNC_STATUS.put(key, JSON.stringify(updatedVersionInfo));
-                  console.log(`已从R2恢复 ${repo} 的文件路径记录: ${updatedVersionInfo.filePaths.length}个文件`);
-                } catch (error) {
-                  console.error(`检查R2中文件时出错: ${error.message}`);
+                  console.log(`已从R2更新 ${repo} 的文件路径记录: ${updatedVersionInfo.filePaths.length}个文件`);
+                }
+                
+                // 判断文件是否完整
+                // 如果无法获取GitHub上的文件数量，则以KV中的filePaths列表作为参考
+                const referenceCount = expectedAssetCount > 0 ? expectedAssetCount : 
+                                     (storedVersionInfo.filePaths && storedVersionInfo.filePaths.length > 0 ? 
+                                      storedVersionInfo.filePaths.length : 0);
+                
+                if (referenceCount > 0 && actualFileCount >= referenceCount) {
+                  hasCompleteFiles = true;
+                  console.log(`${repo} 在R2中有 ${actualFileCount} 个文件，符合或超过预期的 ${referenceCount} 个文件`);
+                } else if (referenceCount > 0) {
+                  console.log(`${repo} 在R2中只有 ${actualFileCount} 个文件，少于预期的 ${referenceCount} 个文件，需要重新同步`);
                 }
               }
-              
-              if (!hasFiles) {
-                console.log(`${repo} 版本相同但文件记录为空，需要重新同步`);
-                return true;
-              }
+            } catch (error) {
+              console.error(`检查R2中文件时出错: ${error.message}`);
+            }
+          }
+          
+          // 如果版本相同，再检查文件是否完整
+          if (storedVersionInfo.version === currentVersion) {
+            // 如果GitHub上的期望文件数量大于0，且R2中的实际文件数量小于期望数量，表明需要重新同步
+            if (expectedAssetCount > 0 && actualFileCount < expectedAssetCount) {
+              console.log(`${repo} 的版本 ${currentVersion} 相同，但文件不完整(${actualFileCount}/${expectedAssetCount})，需要重新同步`);
+              return true;
             }
             
-            console.log(`${repo} 的版本 ${currentVersion} 已经是最新的，无需更新`);
+            // 如果文件路径记录为空或文件数量为0，但状态为synced
+            if (storedVersionInfo.status === 'synced' && 
+                (!storedVersionInfo.filePaths || 
+                 storedVersionInfo.filePaths.length === 0 || 
+                 actualFileCount === 0)) {
+              console.log(`${repo} 版本相同但文件记录为空或文件不存在，需要重新同步`);
+              return true;
+            }
+            
+            console.log(`${repo} 的版本 ${currentVersion} 已经是最新的，且文件完整，无需更新`);
             return false;
           }
           

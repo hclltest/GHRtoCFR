@@ -294,11 +294,17 @@ const HTML_TEMPLATE = `
           const reader = response.body.getReader();
           const decoder = new TextDecoder('utf-8');
           
+          // 添加变量跟踪同步状态
+          let syncComplete = false;
+          let allReposComplete = false;
+          
           function readStream() {
             reader.read().then(function(result) {
               if (result.done) {
-                syncLog.innerHTML += '\\n同步已完成，3秒后自动刷新页面...\\n';
-                setTimeout(function() { window.location.reload(); }, 3000);
+                if (!syncComplete) {
+                  syncLog.innerHTML += '\\n读取同步日志流结束，但未收到完成信号。5秒后自动刷新页面...\\n';
+                  setTimeout(function() { window.location.reload(); }, 5000);
+                }
                 return;
               }
               
@@ -306,17 +312,27 @@ const HTML_TEMPLATE = `
               syncLog.innerHTML += text;
               syncLog.scrollTop = syncLog.scrollHeight;
               
-              if (text.includes('所有同步任务完成') || 
-                  text.includes('同步过程中出错') || 
-                  text.includes('同步失败')) {
-                syncLog.innerHTML += '\\n同步已完成，3秒后自动刷新页面...\\n';
+              // 检查是否包含明确的完成信号
+              if (text.includes('所有同步任务完成')) {
+                syncComplete = true;
+                allReposComplete = true;
+                syncLog.innerHTML += '\\n所有仓库同步完成！3秒后自动刷新页面...\\n';
                 setTimeout(function() { window.location.reload(); }, 3000);
                 return;
               }
               
+              // 检查是否有错误信号
+              if (text.includes('同步过程中出错')) {
+                syncComplete = true;
+                syncLog.innerHTML += '\\n同步过程中出错。5秒后自动刷新页面...\\n';
+                setTimeout(function() { window.location.reload(); }, 5000);
+                return;
+              }
+              
+              // 不要过早地结束日志读取，继续读取流
               readStream();
             }).catch(function(error) {
-              syncLog.innerHTML += '\\n日志流读取错误: ' + error.message + '\\n请刷新页面查看最新状态...\\n';
+              syncLog.innerHTML += '\\n日志流读取错误: ' + error.message + '\\n请手动刷新页面查看最新状态...\\n';
               setTimeout(function() { window.location.reload(); }, 5000);
             });
           }
@@ -350,11 +366,16 @@ const HTML_TEMPLATE = `
           const reader = response.body.getReader();
           const decoder = new TextDecoder('utf-8');
           
+          // 添加变量跟踪同步状态
+          let syncComplete = false;
+          
           function readStream() {
             reader.read().then(function(result) {
               if (result.done) {
-                syncLog.innerHTML += '\\n同步已完成，3秒后自动刷新页面...\\n';
-                setTimeout(function() { window.location.reload(); }, 3000);
+                if (!syncComplete) {
+                  syncLog.innerHTML += '\\n读取同步日志流结束，但未收到完成信号。5秒后自动刷新页面...\\n';
+                  setTimeout(function() { window.location.reload(); }, 5000);
+                }
                 return;
               }
               
@@ -362,17 +383,26 @@ const HTML_TEMPLATE = `
               syncLog.innerHTML += text;
               syncLog.scrollTop = syncLog.scrollHeight;
               
-              if (text.includes('同步完成') || 
-                  text.includes('同步过程中出错') || 
-                  text.includes('同步失败')) {
-                syncLog.innerHTML += '\\n同步已完成，3秒后自动刷新页面...\\n';
+              // 检查是否包含该仓库的完成信号
+              if (text.includes(repo + ' 同步完成')) {
+                syncComplete = true;
+                syncLog.innerHTML += '\\n仓库 ' + repo + ' 同步完成！3秒后自动刷新页面...\\n';
                 setTimeout(function() { window.location.reload(); }, 3000);
                 return;
               }
               
+              // 检查是否有错误信号
+              if (text.includes('同步 ' + repo + ' 时出错') || text.includes('同步过程中出错')) {
+                syncComplete = true;
+                syncLog.innerHTML += '\\n仓库 ' + repo + ' 同步出错。5秒后自动刷新页面...\\n';
+                setTimeout(function() { window.location.reload(); }, 5000);
+                return;
+              }
+              
+              // 继续读取流
               readStream();
             }).catch(function(error) {
-              syncLog.innerHTML += '\\n日志流读取错误: ' + error.message + '\\n请刷新页面查看最新状态...\\n';
+              syncLog.innerHTML += '\\n日志流读取错误: ' + error.message + '\\n请手动刷新页面查看最新状态...\\n';
               setTimeout(function() { window.location.reload(); }, 5000);
             });
           }
@@ -631,139 +661,149 @@ export default {
     const writer = stream.writable.getWriter();
     const encoder = new TextEncoder();
     
-    ctx.waitUntil(
-      (async () => {
-        try {
-          for (const config of syncTargets) {
-            const { repo, path } = config;
-            await writer.write(encoder.encode(`开始同步 ${repo}...\n`));
+    // 创建一个Promise，在同步完成后解析
+    const syncPromise = new Promise(async (resolve, reject) => {
+      try {
+        for (const config of syncTargets) {
+          const { repo, path } = config;
+          await writer.write(encoder.encode(`开始同步 ${repo}...\n`));
+          
+          try {
+            // 获取最新版本信息
+            const releaseInfo = await this.fetchLatestRelease(repo, env);
+            if (!releaseInfo) {
+              await writer.write(encoder.encode(`无法获取 ${repo} 的发布信息\n`));
+              continue;
+            }
             
-            try {
-              // 获取最新版本信息
-              const releaseInfo = await this.fetchLatestRelease(repo, env);
-              if (!releaseInfo) {
-                await writer.write(encoder.encode(`无法获取 ${repo} 的发布信息\n`));
-                continue;
-              }
-              
-              const { tag_name, published_at, assets } = releaseInfo;
-              await writer.write(encoder.encode(`${repo} 的最新版本: ${tag_name}, 发布于: ${published_at}\n`));
-              
-              // 首先检查是否需要更新
-              const needUpdate = await this.checkNeedUpdate(env, repo, tag_name, path);
-              if (!needUpdate) {
-                await writer.write(encoder.encode(`${repo} 已是最新版本，无需更新\n`));
-                // 更新同步状态
-                const syncedRepo = {
-                  repo,
-                  version: tag_name,
-                  lastUpdate: new Date().toISOString(),
-                  status: 'synced',
-                  path,
-                  filePaths: [] // 初始化一个空的文件路径数组，会在文件上传时填充
-                };
-                await this.saveVersionInfo(env, repo, syncedRepo);
-                continue;
-              }
-              
-              // 同步之前先清空旧的filePaths，防止数据混淆
-              await this.clearFilePathsList(env, repo);
-              
-              // 只有需要更新时才删除旧文件
-              await writer.write(encoder.encode(`正在删除 ${repo} 的旧文件...\n`));
-              await this.deleteRepoFiles(env, repo);
-              
-              // 下载并上传新文件
-              await writer.write(encoder.encode(`正在下载 ${repo} 的最新文件...\n`));
-              
-              // 过滤出有效的资源文件
-              const validAssets = assets.filter(asset => {
-                return !asset.name.includes("Source code") &&
-                       !asset.name.endsWith(".sha256") &&
-                       !asset.name.endsWith(".asc");
-              });
-              
-              // 确保文件来源正确
-              validAssets.forEach(asset => {
-                if (!asset.sourceRepo) {
-                  asset.sourceRepo = repo;
-                }
-              });
-              
-              await writer.write(encoder.encode(`找到 ${validAssets.length} 个有效资源文件\n`));
-              
-              // 跟踪平台文件上传情况
-              const platformCounts = {
-                Windows: 0,
-                macOS: 0,
-                Linux: 0,
-                Android: 0,
-                Other: 0
-              };
-              
-              // 保存已确认属于此仓库的文件路径
-              const confirmedFilePaths = [];
-              
-              let uploadedCount = 0;
-              for (let i = 0; i < validAssets.length; i++) {
-                const asset = validAssets[i];
-                await writer.write(encoder.encode(`处理资源 (${i+1}/${validAssets.length}): ${asset.name}\n`));
-                
-                try {
-                  const platform = this.determineOSType(asset.name);
-                  const uploadedPath = await this.downloadAndUploadAsset(asset, repo, path, platform, env);
-                  if (uploadedPath) {  // 只有实际上传成功的文件才计数
-                    platformCounts[platform]++;
-                    uploadedCount++;
-                    confirmedFilePaths.push(uploadedPath);
-                    await writer.write(encoder.encode(`成功上传: ${asset.name} → ${platform}\n`));
-                  } else {
-                    await writer.write(encoder.encode(`跳过: ${asset.name}，不属于当前仓库\n`));
-                  }
-                } catch (assetError) {
-                  await writer.write(encoder.encode(`资源处理失败: ${asset.name} - ${assetError.message}\n`));
-                }
-              }
-              
-              // 保存版本信息到KV
+            const { tag_name, published_at, assets } = releaseInfo;
+            await writer.write(encoder.encode(`${repo} 的最新版本: ${tag_name}, 发布于: ${published_at}\n`));
+            
+            // 首先检查是否需要更新
+            const needUpdate = await this.checkNeedUpdate(env, repo, tag_name, path);
+            if (!needUpdate) {
+              await writer.write(encoder.encode(`${repo} 已是最新版本，无需更新\n`));
+              // 更新同步状态
               const syncedRepo = {
                 repo,
                 version: tag_name,
                 lastUpdate: new Date().toISOString(),
                 status: 'synced',
                 path,
-                filePaths: confirmedFilePaths // 使用确认的文件路径列表
+                filePaths: [] // 初始化一个空的文件路径数组，会在文件上传时填充
               };
               await this.saveVersionInfo(env, repo, syncedRepo);
-              
-              const platformSummary = Object.entries(platformCounts)
-                .filter(([_, count]) => count > 0)
-                .map(([platform, count]) => `${platform}: ${count}个文件`)
-                .join(', ');
-              
-              await writer.write(encoder.encode(`${repo} 同步完成，版本 ${tag_name}，共上传 ${uploadedCount} 个文件 (${platformSummary})\n`));
-            } catch (error) {
-              await writer.write(encoder.encode(`同步 ${repo} 时出错: ${error.message}\n`));
-              // 更新为错误状态
-              const errorRepo = {
-                repo,
-                status: 'error',
-                error: error.message,
-                lastUpdate: new Date().toISOString(),
-                path: config.path
-              };
-              await this.saveVersionInfo(env, repo, errorRepo);
+              continue;
             }
+            
+            // 同步之前先清空旧的filePaths，防止数据混淆
+            await this.clearFilePathsList(env, repo);
+            
+            // 只有需要更新时才删除旧文件
+            await writer.write(encoder.encode(`正在删除 ${repo} 的旧文件...\n`));
+            await this.deleteRepoFiles(env, repo);
+            
+            // 下载并上传新文件
+            await writer.write(encoder.encode(`正在下载 ${repo} 的最新文件...\n`));
+            
+            // 过滤出有效的资源文件
+            const validAssets = assets.filter(asset => {
+              return !asset.name.includes("Source code") &&
+                     !asset.name.endsWith(".sha256") &&
+                     !asset.name.endsWith(".asc");
+            });
+            
+            // 确保文件来源正确
+            validAssets.forEach(asset => {
+              if (!asset.sourceRepo) {
+                asset.sourceRepo = repo;
+              }
+            });
+            
+            await writer.write(encoder.encode(`找到 ${validAssets.length} 个有效资源文件\n`));
+            
+            // 跟踪平台文件上传情况
+            const platformCounts = {
+              Windows: 0,
+              macOS: 0,
+              Linux: 0,
+              Android: 0,
+              Other: 0
+            };
+            
+            // 保存已确认属于此仓库的文件路径
+            const confirmedFilePaths = [];
+            
+            let uploadedCount = 0;
+            for (let i = 0; i < validAssets.length; i++) {
+              const asset = validAssets[i];
+              await writer.write(encoder.encode(`处理资源 (${i+1}/${validAssets.length}): ${asset.name}\n`));
+              
+              try {
+                const platform = this.determineOSType(asset.name);
+                const uploadedPath = await this.downloadAndUploadAsset(asset, repo, path, platform, env);
+                if (uploadedPath) {  // 只有实际上传成功的文件才计数
+                  platformCounts[platform]++;
+                  uploadedCount++;
+                  confirmedFilePaths.push(uploadedPath);
+                  await writer.write(encoder.encode(`成功上传: ${asset.name} → ${platform}\n`));
+                } else {
+                  await writer.write(encoder.encode(`跳过: ${asset.name}，不属于当前仓库\n`));
+                }
+              } catch (assetError) {
+                await writer.write(encoder.encode(`资源处理失败: ${asset.name} - ${assetError.message}\n`));
+              }
+            }
+            
+            // 保存版本信息到KV
+            const syncedRepo = {
+              repo,
+              version: tag_name,
+              lastUpdate: new Date().toISOString(),
+              status: 'synced',
+              path,
+              filePaths: confirmedFilePaths // 使用确认的文件路径列表
+            };
+            await this.saveVersionInfo(env, repo, syncedRepo);
+            
+            const platformSummary = Object.entries(platformCounts)
+              .filter(([_, count]) => count > 0)
+              .map(([platform, count]) => `${platform}: ${count}个文件`)
+              .join(', ');
+            
+            await writer.write(encoder.encode(`${repo} 同步完成，版本 ${tag_name}，共上传 ${uploadedCount} 个文件 (${platformSummary})\n`));
+          } catch (error) {
+            await writer.write(encoder.encode(`同步 ${repo} 时出错: ${error.message}\n`));
+            // 更新为错误状态
+            const errorRepo = {
+              repo,
+              status: 'error',
+              error: error.message,
+              lastUpdate: new Date().toISOString(),
+              path: config.path
+            };
+            await this.saveVersionInfo(env, repo, errorRepo);
           }
-          
-          await writer.write(encoder.encode("所有同步任务完成\n"));
-        } catch (error) {
-          await writer.write(encoder.encode(`同步过程中出错: ${error.message}\n`));
-        } finally {
-          await writer.close();
         }
-      })()
-    );
+        
+        // 所有仓库同步完成，写入完成消息
+        await writer.write(encoder.encode("所有同步任务完成\n"));
+        resolve();
+      } catch (error) {
+        await writer.write(encoder.encode(`同步过程中出错: ${error.message}\n`));
+        reject(error);
+      } finally {
+        // 确保流关闭
+        try {
+          await writer.close();
+        } catch (e) {
+          console.error("关闭流时出错:", e);
+        }
+      }
+    });
+    
+    // 使用waitUntil确保即使连接断开，同步任务也会继续完成
+    ctx.waitUntil(syncPromise);
 
     return new Response(stream.readable, {
       headers: {

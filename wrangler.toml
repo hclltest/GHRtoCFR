@@ -14,8 +14,8 @@ binding = "SYNC_STATUS"
 id = "671e98de4e3c4d44a08cba27826cf7b3" # 替换为您创建的KV命名空间ID
 
 [vars]
-REPO_1 = "2dust/v2rayN:/z_test"
-REPO_2 = "2dust/v2rayNG:/z_test"
+REPO_1 = "2dust/v2rayN:/z_最好会点小魔法"
+REPO_2 = "2dust/v2rayNG:/z_最好会点小魔法"
 
 [observability.logs]
 enabled = true

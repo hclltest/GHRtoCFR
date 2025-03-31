@@ -765,8 +765,66 @@ export default {
           const storedVersionInfo = JSON.parse(storedVersionInfoStr);
           console.log(`KV中 ${repo} 的版本信息: ${storedVersionInfoStr}`);
           
+          // 检查存储路径是否发生变化
+          if (storedVersionInfo.path !== path) {
+            console.log(`${repo} 的存储路径已从 ${storedVersionInfo.path} 变更为 ${path}，需要重新同步`);
+            return true;
+          }
+          
+          // 如果存储路径没变，检查文件是否存在
+          if (storedVersionInfo.filePaths && 
+              Array.isArray(storedVersionInfo.filePaths) && 
+              storedVersionInfo.filePaths.length === 0 && 
+              storedVersionInfo.status === 'synced') {
+            console.log(`${repo} 的文件路径记录为空，可能未正确同步，需要重新同步`);
+            return true;
+          }
+          
           // 如果KV中已有版本信息，直接比较版本
           if (storedVersionInfo.version === currentVersion) {
+            // 额外检查：如果文件路径记录为空，但状态为synced，可能需要重新同步
+            if (storedVersionInfo.filePaths && 
+                Array.isArray(storedVersionInfo.filePaths) && 
+                storedVersionInfo.filePaths.length === 0 && 
+                storedVersionInfo.status === 'synced') {
+              // 检查R2中是否有实际文件
+              let hasFiles = false;
+              if (env.R2_BUCKET) {
+                try {
+                  // 构建基本的路径前缀
+                  const prefix = path && path.startsWith("/") ? path.substring(1) : path;
+                  const basePath = prefix ? `${prefix}/` : "";
+                  const objects = await env.R2_BUCKET.list({ prefix: basePath });
+                  // 如果在R2中找不到对应路径的文件，需要重新同步
+                  if (!objects || !objects.objects || objects.objects.length === 0) {
+                    console.log(`${repo} 在R2中未找到文件，需要重新同步`);
+                    return true;
+                  }
+                  
+                  // 过滤这个仓库的文件
+                  const repoFiles = objects.objects.filter(obj => this.isFileFromRepo(obj.key, repo));
+                  if (repoFiles.length === 0) {
+                    console.log(`${repo} 在R2中未找到与该仓库相关的文件，需要重新同步`);
+                    return true;
+                  }
+                  
+                  hasFiles = true;
+                  // 更新文件路径记录
+                  const updatedVersionInfo = { ...storedVersionInfo };
+                  updatedVersionInfo.filePaths = repoFiles.map(obj => obj.key);
+                  await env.SYNC_STATUS.put(key, JSON.stringify(updatedVersionInfo));
+                  console.log(`已从R2恢复 ${repo} 的文件路径记录: ${updatedVersionInfo.filePaths.length}个文件`);
+                } catch (error) {
+                  console.error(`检查R2中文件时出错: ${error.message}`);
+                }
+              }
+              
+              if (!hasFiles) {
+                console.log(`${repo} 版本相同但文件记录为空，需要重新同步`);
+                return true;
+              }
+            }
+            
             console.log(`${repo} 的版本 ${currentVersion} 已经是最新的，无需更新`);
             return false;
           }
@@ -880,23 +938,57 @@ export default {
       
       // 上传到 R2 存储桶
       await env.R2_BUCKET.put(storagePath, response.body);
+      console.log(`已上传文件 ${asset.name} 到 ${storagePath}`);
       
       // 记录上传的文件路径，方便后续删除时识别
-      const repoKey = `repo:${repo}`;
-      try {
-        const versionInfoStr = await env.SYNC_STATUS.get(repoKey);
-        if (versionInfoStr) {
-          const versionInfo = JSON.parse(versionInfoStr);
-          if (!versionInfo.filePaths) {
-            versionInfo.filePaths = [];
+      if (env.SYNC_STATUS) {
+        const repoKey = `repo:${repo}`;
+        try {
+          const versionInfoStr = await env.SYNC_STATUS.get(repoKey);
+          if (versionInfoStr) {
+            const versionInfo = JSON.parse(versionInfoStr);
+            
+            // 确保filePaths是一个数组
+            if (!versionInfo.filePaths) {
+              versionInfo.filePaths = [];
+            } else if (!Array.isArray(versionInfo.filePaths)) {
+              versionInfo.filePaths = [];
+            }
+            
+            // 避免重复添加同一路径
+            if (!versionInfo.filePaths.includes(storagePath)) {
+              versionInfo.filePaths.push(storagePath);
+              await env.SYNC_STATUS.put(repoKey, JSON.stringify(versionInfo));
+              console.log(`已将 ${storagePath} 添加到 ${repo} 的文件路径记录中，现有 ${versionInfo.filePaths.length} 个文件`);
+            }
+          } else {
+            // 如果KV中没有信息，创建一个初始记录
+            const initialInfo = {
+              repo,
+              status: 'syncing',
+              path,
+              filePaths: [storagePath]
+            };
+            await env.SYNC_STATUS.put(repoKey, JSON.stringify(initialInfo));
+            console.log(`为 ${repo} 创建初始文件路径记录: ${storagePath}`);
           }
-          if (!versionInfo.filePaths.includes(storagePath)) {
-            versionInfo.filePaths.push(storagePath);
-            await env.SYNC_STATUS.put(repoKey, JSON.stringify(versionInfo));
+        } catch (err) {
+          console.error(`更新文件路径记录失败: ${err.message}`);
+          
+          // 如果处理出错，尝试创建新的记录
+          try {
+            const fallbackInfo = {
+              repo,
+              status: 'syncing',
+              path,
+              filePaths: [storagePath]
+            };
+            await env.SYNC_STATUS.put(repoKey, JSON.stringify(fallbackInfo));
+            console.log(`为 ${repo} 创建备用文件路径记录: ${storagePath}`);
+          } catch (fallbackErr) {
+            console.error(`创建备用文件路径记录也失败: ${fallbackErr.message}`);
           }
         }
-      } catch (err) {
-        console.error(`更新文件路径记录失败: ${err.message}`);
       }
       
       return storagePath;
@@ -1403,10 +1495,90 @@ export default {
       await this.fetchGitHubRateLimit(env);
     }
     
+    // 获取仓库配置
+    const repoConfigs = this.getRepoConfigs(env);
+    
+    // 检查路径变更或重置同步状态
+    if (env.SYNC_STATUS && repoConfigs.length > 0) {
+      for (const config of repoConfigs) {
+        const { repo, path } = config;
+        const repoKey = `repo:${repo}`;
+        
+        try {
+          const versionInfoJson = await env.SYNC_STATUS.get(repoKey);
+          if (versionInfoJson) {
+            const versionInfo = JSON.parse(versionInfoJson);
+            
+            // 检查路径是否变更
+            if (versionInfo.path !== path) {
+              console.log(`检测到 ${repo} 的路径已从 ${versionInfo.path} 变更为 ${path}，更新状态`);
+              
+              // 创建新的状态对象
+              const updatedInfo = {
+                ...versionInfo,
+                path: path,
+                status: 'pending',
+                message: '路径已变更，需要重新同步'
+              };
+              
+              // 保存到KV
+              await env.SYNC_STATUS.put(repoKey, JSON.stringify(updatedInfo));
+            }
+            
+            // 检查文件路径是否为空，但状态为已同步
+            if (versionInfo.status === 'synced' && 
+                (!versionInfo.filePaths || versionInfo.filePaths.length === 0)) {
+              
+              // 检查R2中是否存在文件
+              let hasFiles = false;
+              if (env.R2_BUCKET) {
+                try {
+                  // 构建基本的路径前缀
+                  const prefix = path && path.startsWith("/") ? path.substring(1) : path;
+                  const basePath = prefix ? `${prefix}/` : "";
+                  const objects = await env.R2_BUCKET.list({ prefix: basePath });
+                  
+                  // 过滤这个仓库的文件
+                  if (objects && objects.objects && objects.objects.length > 0) {
+                    const repoFiles = objects.objects.filter(obj => this.isFileFromRepo(obj.key, repo));
+                    if (repoFiles.length > 0) {
+                      hasFiles = true;
+                      
+                      // 更新文件路径记录
+                      const updatedVersionInfo = { ...versionInfo };
+                      updatedVersionInfo.filePaths = repoFiles.map(obj => obj.key);
+                      await env.SYNC_STATUS.put(repoKey, JSON.stringify(updatedVersionInfo));
+                      console.log(`已从R2恢复 ${repo} 的文件路径记录: ${updatedVersionInfo.filePaths.length}个文件`);
+                    }
+                  }
+                } catch (error) {
+                  console.error(`检查R2中文件时出错: ${error.message}`);
+                }
+              }
+              
+              // 如果没有找到文件，更新状态为待同步
+              if (!hasFiles) {
+                console.log(`${repo} 的状态为已同步，但未找到文件记录，标记为待同步`);
+                
+                const updatedInfo = {
+                  ...versionInfo,
+                  status: 'pending',
+                  message: '需要重新同步'
+                };
+                
+                await env.SYNC_STATUS.put(repoKey, JSON.stringify(updatedInfo));
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`检查 ${repo} 路径变更时出错:`, error);
+        }
+      }
+    }
+    
     // 如果还没有仓库信息，尝试获取配置的仓库并从KV中加载其状态
     if (this.syncedRepos.length === 0 || this.syncedRepos.some(repo => repo.status === "pending")) {
       try {
-        const repoConfigs = this.getRepoConfigs(env);
         if (repoConfigs.length > 0) {
           // 从KV加载存储的版本信息
           const updatedRepos = [];

@@ -179,14 +179,18 @@ const HTML_TEMPLATE = `
     .footer {
       text-align: center;
       margin-top: 30px;
+      padding: 0 20px;
+    }
+    .footer-content {
       display: flex;
-      flex-direction: column;
+      justify-content: space-between;
       align-items: center;
-      gap: 10px;
+      width: 100%;
     }
     .last-check {
       font-size: 0.9rem;
       color: #666;
+      text-align: left;
     }
     .api-info {
       font-size: 0.9rem;
@@ -194,7 +198,18 @@ const HTML_TEMPLATE = `
       padding: 8px 16px;
       background-color: #f8fafc;
       border-radius: 6px;
+      text-align: right;
+      width: auto;
       display: inline-block;
+    }
+    @media (max-width: 768px) {
+      .footer-content {
+        flex-direction: column;
+        gap: 10px;
+      }
+      .last-check, .api-info {
+        text-align: center;
+      }
     }
     .api-count {
       font-weight: 600;
@@ -265,8 +280,10 @@ const HTML_TEMPLATE = `
   </div>
   
   <div class="footer">
-    <div class="last-check">最后检查时间: {{LAST_CHECK_TIME}}</div>
-    <div class="api-info">{{API_RATE_LIMIT}}</div>
+    <div class="footer-content">
+      <div class="last-check">最后检查时间: {{LAST_CHECK_TIME}}</div>
+      <div class="api-info">{{API_RATE_LIMIT}}</div>
+    </div>
   </div>
   
   <script>
@@ -551,12 +568,8 @@ export default {
       
       // 处理 favicon.svg 请求
       if (pathname === "/favicon.svg") {
-        // 使用内联SVG直接提供favicon
-        const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-          <polyline points="7 10 12 15 17 10"/>
-          <line x1="12" y1="15" x2="12" y2="3"/>
-        </svg>`;
+        // 直接返回微信支付图标SVG
+        const svgContent = `<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg t="1743514247815" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="1283" width="256" height="256" xmlns:xlink="http://www.w3.org/1999/xlink"><path d="M512 512m-512 0a512 512 0 1 0 1024 0 512 512 0 1 0-1024 0Z" fill="#FFFFFF" p-id="1284"></path><path d="M512 0a512 512 0 0 0 0 1024 512 512 0 0 0 0-1024z m-200.874667 867.669333l32.597334-71.168A324.181333 324.181333 0 0 1 188.757333 597.333333v-0.170666a324.949333 324.949333 0 0 1 229.888-397.909334c5.205333-1.365333 10.581333-2.645333 15.872-3.754666l40.362667 84.309333a235.178667 235.178667 0 0 0-93.610667 435.029333l37.461334-81.834666 88.405333 182.613333-196.010667 52.053333z m505.344-218.538666a324.266667 324.266667 0 0 1-211.285333 177.92c-3.754667 1.024-7.594667 1.877333-11.434667 2.816l-40.448-83.712a235.093333 235.093333 0 0 0 90.794667-433.408l-36.181333 78.08-87.722667-182.954667 196.266667-51.456-34.474667 74.581333a324.437333 324.437333 0 0 1 134.485333 418.133334z" fill="#09BB07" p-id="1285"></path></svg>`;
         
         return new Response(svgContent, {
           headers: { 

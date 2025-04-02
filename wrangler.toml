@@ -1,9 +1,9 @@
-name = "ghrtocfr"
+name = "ghrtocfr" # 这个名字可以自定义
 main = "src/index.js"
 compatibility_date = "2025-01-01"
 
 [triggers]
-crons = ["0 0 * * *"]
+crons = ["0 0 * * *"] # 每天零点执行，提供触发时机
 
 [[r2_buckets]]
 binding = "R2_BUCKET"
@@ -14,8 +14,10 @@ binding = "SYNC_STATUS"
 id = "671e98de4e3c4d44a08cba27826cf7b3" # 替换为您创建的KV命名空间ID
 
 [vars]
+# 添加你想要监控仓库，格式为 REPO_x = "github用户名/github仓库:/R2存储桶路径"
 REPO_1 = "2dust/v2rayN:/z_最好会点小魔法"
 REPO_2 = "2dust/v2rayNG:/z_最好会点小魔法"
+# CHECK_INTERVAL = 604800 # 单位为秒，默认7天，决定是否执行同步
 
 [observability.logs]
 enabled = true

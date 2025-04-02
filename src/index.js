@@ -2,8 +2,14 @@
  * GHRtoCFR - 从 GitHub Releases 同步文件到 Cloudflare R2
  */
 
-// 存储上次检查时间的全局变量
+// 存储上次检查时间的全局变量（在从KV加载之前的初始值）
 let lastCheckTime = 0;
+let lastManualCheckTime = 0;
+let showNextCheckTime = false;
+
+// KV存储键名常量
+const KV_KEY_AUTO_CHECK_TIME = "system:lastCheckTime";
+const KV_KEY_MANUAL_CHECK_TIME = "system:lastManualCheckTime";
 
 // 默认检查间隔（7天，单位：秒）
 const DEFAULT_CHECK_INTERVAL = 604800;
@@ -298,7 +304,7 @@ const HTML_TEMPLATE = `
   
   <div class="footer">
     <div class="footer-content">
-      <div class="last-check">最后检查时间: {{LAST_CHECK_TIME}}</div>
+      <div class="last-check" id="lastCheckInfo" style="cursor: pointer;" onclick="toggleCheckTimeDisplay()">最后检查时间: {{LAST_CHECK_TIME}}</div>
       <div class="api-info">{{API_RATE_LIMIT}}</div>
     </div>
   </div>
@@ -310,6 +316,10 @@ const HTML_TEMPLATE = `
       
       syncAllButton.disabled = true;
       syncLog.innerHTML += '开始同步所有仓库...\\n';
+      
+      // 记录手动同步时间
+      const now = new Date();
+      localStorage.setItem('lastManualCheckTime', now.getTime() / 1000);
       
       fetch('/sync')
         .then(function(response) {
@@ -378,6 +388,10 @@ const HTML_TEMPLATE = `
       
       syncButton.disabled = true;
       syncLog.innerHTML += '开始同步仓库: ' + repo + '...\\n';
+      
+      // 记录手动同步时间
+      const now = new Date();
+      localStorage.setItem('lastManualCheckTime', now.getTime() / 1000);
       
       fetch('/sync?repo=' + encodeURIComponent(repo))
         .then(function(response) {
@@ -552,6 +566,78 @@ const HTML_TEMPLATE = `
         pageIdleTime = 0;
       }
     }, 1000);
+    
+    // 切换时间显示函数
+    function toggleCheckTimeDisplay() {
+      const showNext = localStorage.getItem('showNextCheckTime') === 'true';
+      localStorage.setItem('showNextCheckTime', !showNext);
+      refreshTimeDisplay();
+    }
+    
+    // 刷新时间显示
+    function refreshTimeDisplay() {
+      const lastCheckInfo = document.getElementById('lastCheckInfo');
+      const showNext = localStorage.getItem('showNextCheckTime') === 'true';
+      
+      if (showNext) {
+        // 获取下次检查时间
+        fetch('/api/next-check-time')
+          .then(response => response.json())
+          .then(data => {
+            if (data.nextCheckTime) {
+              const nextDate = new Date(data.nextCheckTime * 1000);
+              const nextTimeStr = nextDate.toLocaleString('zh-CN', {
+                year: 'numeric', month: 'numeric', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: false
+              });
+              lastCheckInfo.innerHTML = '下次检查时间: ' + nextTimeStr;
+            } else {
+              lastCheckInfo.innerHTML = '下次检查时间: 未设置';
+            }
+          })
+          .catch(error => {
+            console.error('获取下次检查时间失败:', error);
+            lastCheckInfo.innerHTML = '下次检查时间: 获取失败';
+          });
+      } else {
+        // 获取状态信息
+        fetch('/api/status')
+          .then(response => response.json())
+          .then(data => {
+            let timeDisplay = '未检查';
+            
+            // 优先显示手动检查时间
+            const manualTime = localStorage.getItem('lastManualCheckTime');
+            if (manualTime) {
+              const manualDate = new Date(manualTime * 1000);
+              timeDisplay = manualDate.toLocaleString('zh-CN', {
+                year: 'numeric', month: 'numeric', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: false
+              });
+            } else if (data.lastCheck) {
+              // 如果没有手动检查记录，显示自动检查时间
+              const lastDate = new Date(data.lastCheck);
+              timeDisplay = lastDate.toLocaleString('zh-CN', {
+                year: 'numeric', month: 'numeric', day: 'numeric',
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                hour12: false
+              });
+            }
+            
+            lastCheckInfo.innerHTML = '最后检查时间: ' + timeDisplay;
+          })
+          .catch(error => {
+            console.error('获取状态信息失败:', error);
+          });
+      }
+    }
+    
+    // 初始化时间显示
+    document.addEventListener('DOMContentLoaded', function() {
+      refreshTimeDisplay();
+    });
   </script>
 </body>
 </html>`;
@@ -580,6 +666,9 @@ export default {
    */
   async fetch(request, env, ctx) {
     try {
+      // 首先从KV加载检查时间
+      await this.loadCheckTimes(env);
+      
       const url = new URL(request.url);
       const pathname = url.pathname;
       
@@ -628,6 +717,21 @@ export default {
       // 添加一个变量来跟踪同步开始时间，用于超时处理
       let syncStartTime = null;
       
+      // 新增 API 端点获取下次检查时间
+      if (pathname === "/api/next-check-time") {
+        const now = Math.floor(Date.now() / 1000);
+        const checkInterval = parseInt(env.CHECK_INTERVAL || DEFAULT_CHECK_INTERVAL);
+        const nextCheckTime = lastCheckTime > 0 ? lastCheckTime + checkInterval : null;
+        
+        return new Response(JSON.stringify({
+          nextCheckTime: nextCheckTime,
+          checkInterval: checkInterval
+        }), {
+          headers: { "Content-Type": "application/json" },
+          status: 200
+        });
+      }
+      
       // 处理同步API请求
       if (pathname === "/sync") {
         // 检查R2绑定
@@ -638,6 +742,17 @@ export default {
         // 处理同步任务
         this.isSyncing = true; // 设置同步状态
         syncStartTime = Date.now(); // 记录开始时间
+        lastManualCheckTime = Math.floor(Date.now() / 1000); // 记录手动检查时间
+        
+        // 保存到KV
+        if (env.SYNC_STATUS) {
+          try {
+            await env.SYNC_STATUS.put(KV_KEY_MANUAL_CHECK_TIME, lastManualCheckTime.toString());
+            console.log(`已更新手动检查时间: ${new Date(lastManualCheckTime * 1000).toISOString()}`);
+          } catch (error) {
+            console.error("保存手动检查时间失败:", error);
+          }
+        }
         
         // 创建一个Promise，如果同步超过10分钟，则自动超时
         const timeoutPromise = new Promise((_, reject) => {
@@ -677,6 +792,7 @@ export default {
         return new Response(JSON.stringify({
           repos: this.syncedRepos,
           lastCheck: lastCheckTime ? new Date(lastCheckTime * 1000).toISOString() : null,
+          lastManualCheck: lastManualCheckTime ? new Date(lastManualCheckTime * 1000).toISOString() : null,
           apiRateLimit: this.apiRateLimit,
           error: this.errorMessage,
           info: this.infoMessage,
@@ -707,10 +823,39 @@ export default {
   },
 
   /**
+   * 从KV加载检查时间
+   */
+  async loadCheckTimes(env) {
+    if (!env.SYNC_STATUS) {
+      console.log("KV存储未绑定，无法加载检查时间");
+      return;
+    }
+    
+    try {
+      const autoTimeStr = await env.SYNC_STATUS.get(KV_KEY_AUTO_CHECK_TIME);
+      if (autoTimeStr) {
+        lastCheckTime = parseInt(autoTimeStr);
+        console.log(`从KV加载自动检查时间: ${new Date(lastCheckTime * 1000).toISOString()}`);
+      }
+      
+      const manualTimeStr = await env.SYNC_STATUS.get(KV_KEY_MANUAL_CHECK_TIME);
+      if (manualTimeStr) {
+        lastManualCheckTime = parseInt(manualTimeStr);
+        console.log(`从KV加载手动检查时间: ${new Date(lastManualCheckTime * 1000).toISOString()}`);
+      }
+    } catch (error) {
+      console.error("加载检查时间出错:", error);
+    }
+  },
+
+  /**
    * 处理定时任务触发
    */
   async scheduled(event, env, ctx) {
     try {
+      // 首先从KV加载检查时间
+      await this.loadCheckTimes(env);
+      
       // 检查 R2 绑定
       if (!env.R2_BUCKET) {
         console.error("R2 存储桶未绑定");
@@ -726,15 +871,29 @@ export default {
       const now = Math.floor(Date.now() / 1000);
       const checkInterval = parseInt(env.CHECK_INTERVAL || DEFAULT_CHECK_INTERVAL);
       
-      // 检查是否到达检查间隔
-      if (now - lastCheckTime >= checkInterval) {
+      // 检查是否到达检查间隔，或者是按照cron定时首次执行
+      if (lastCheckTime === 0 || now - lastCheckTime >= checkInterval) {
         this.isSyncing = true;
         try {
-          await this.handleSync(env);
-          lastCheckTime = now;
+          // 创建一个伪请求对象以复用handleSync方法
+          const mockRequest = new Request('https://example.com/sync');
+          await this.handleSync(mockRequest, env, ctx);
+          lastCheckTime = now; // 更新自动检查时间
+          
+          // 保存到KV
+          if (env.SYNC_STATUS) {
+            try {
+              await env.SYNC_STATUS.put(KV_KEY_AUTO_CHECK_TIME, lastCheckTime.toString());
+              console.log(`已更新自动检查时间: ${new Date(lastCheckTime * 1000).toISOString()}`);
+            } catch (error) {
+              console.error("保存自动检查时间失败:", error);
+            }
+          }
         } finally {
           this.isSyncing = false;
         }
+      } else {
+        console.log(`距离上次检查只过了 ${now - lastCheckTime} 秒，不到设定的 ${checkInterval} 秒，跳过本次触发`);
       }
     } catch (error) {
       console.error("定时任务执行出错:", error);
@@ -902,6 +1061,33 @@ export default {
         
         // 所有仓库同步完成，写入完成消息
         await writer.write(encoder.encode("所有同步任务完成\n"));
+        
+        // 更新检查时间
+        const isManualSync = request.url && new URL(request.url).pathname === "/sync";
+        if (isManualSync) {
+          lastManualCheckTime = Math.floor(Date.now() / 1000);
+          // 保存到KV
+          if (env.SYNC_STATUS) {
+            try {
+              await env.SYNC_STATUS.put(KV_KEY_MANUAL_CHECK_TIME, lastManualCheckTime.toString());
+              console.log(`已更新手动检查时间: ${new Date(lastManualCheckTime * 1000).toISOString()}`);
+            } catch (error) {
+              console.error("保存手动检查时间失败:", error);
+            }
+          }
+        } else {
+          lastCheckTime = Math.floor(Date.now() / 1000);
+          // 保存到KV
+          if (env.SYNC_STATUS) {
+            try {
+              await env.SYNC_STATUS.put(KV_KEY_AUTO_CHECK_TIME, lastCheckTime.toString());
+              console.log(`已更新自动检查时间: ${new Date(lastCheckTime * 1000).toISOString()}`);
+            } catch (error) {
+              console.error("保存自动检查时间失败:", error);
+            }
+          }
+        }
+        
         resolve();
       } catch (error) {
         await writer.write(encoder.encode(`同步过程中出错: ${error.message}\n`));
@@ -1597,7 +1783,23 @@ export default {
     
     // 处理最后检查时间
     let lastCheckTimeStr = "未检查";
-    if (lastCheckTime) {
+    if (lastManualCheckTime) {
+      try {
+        // 优先显示手动检查时间
+        lastCheckTimeStr = new Date(lastManualCheckTime * 1000).toLocaleString('zh-CN', {
+          year: 'numeric',
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false,
+          timeZone: 'Asia/Shanghai'
+        });
+      } catch (e) {
+        console.error("手动检查时间格式化错误:", e);
+      }
+    } else if (lastCheckTime) {
       try {
         // 使用中国时区格式化最后检查时间
         lastCheckTimeStr = new Date(lastCheckTime * 1000).toLocaleString('zh-CN', {

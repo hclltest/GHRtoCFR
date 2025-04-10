@@ -588,31 +588,35 @@ const HTML_TEMPLATE = `
             
             try {
               const date = new Date(timestamp);
-              document.getElementById('lastCheckInfo').textContent = 
-                date.toLocaleString('zh-CN', {
-                  year: 'numeric', month: 'numeric', day: 'numeric',
-                  hour: '2-digit', minute: '2-digit', second: '2-digit',
-                  hour12: false
-                });
+              const lastCheckInfo = document.getElementById('lastCheckInfo');
+              if (lastCheckInfo) {
+                // 根据存储的状态决定显示最后检查时间还是下次检查时间
+                const showNext = localStorage.getItem('showNextCheckTime') === 'true';
+                
+                if (showNext && data.nextCheckTime) {
+                  const nextDate = new Date(data.nextCheckTime * 1000);
+                  lastCheckInfo.innerHTML = '下次检查时间: ' + nextDate.toLocaleString('zh-CN', {
+                    year: 'numeric', month: 'numeric', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    hour12: false
+                  });
+                } else {
+                  lastCheckInfo.innerHTML = '最后检查时间: ' + date.toLocaleString('zh-CN', {
+                    year: 'numeric', month: 'numeric', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    hour12: false
+                  });
+                }
+              }
             } catch (e) {
-              document.getElementById('lastCheckInfo').textContent = timestamp;
+              const lastCheckInfo = document.getElementById('lastCheckInfo');
+              if (lastCheckInfo) {
+                lastCheckInfo.innerHTML = '最后检查时间: ' + timestamp;
+              }
             }
           }
           
-          // 更新下次检查时间
-          if (data.nextCheckTime) {
-            try {
-              const date = new Date(data.nextCheckTime * 1000);
-              document.getElementById('nextCheckInfo').textContent = 
-                date.toLocaleString('zh-CN', {
-                  year: 'numeric', month: 'numeric', day: 'numeric',
-                  hour: '2-digit', minute: '2-digit', second: '2-digit',
-                  hour12: false
-                });
-            } catch (e) {
-              document.getElementById('nextCheckInfo').textContent = new Date(data.nextCheckTime * 1000).toString();
-            }
-          }
+          // 删除更新下次检查时间的部分，因为nextCheckInfo元素已不存在
           
           // 支持添加cron历史记录显示，如果页面需要动态更新
           if (data.cronHistory && data.cronHistory.length > 0) {

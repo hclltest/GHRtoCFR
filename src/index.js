@@ -676,11 +676,11 @@ const HTML_TEMPLATE = `
                   timeStr = record.time;
                 }
                 
-                tableHtml += `<tr>
-                  <td>${timeStr}</td>
-                  <td>${status}</td>
-                  <td>${details}</td>
-                </tr>`;
+                tableHtml += '<tr>' +
+                  '<td>' + timeStr + '</td>' +
+                  '<td>' + status + '</td>' +
+                  '<td>' + details + '</td>' +
+                '</tr>';
               }
               
               tableHtml += '</tbody></table>';
@@ -698,7 +698,7 @@ const HTML_TEMPLATE = `
             
             const apiRateLimitInfo = document.querySelector('.api-info');
             if (apiRateLimitInfo) {
-              apiRateLimitInfo.innerHTML = `GitHub API 速率: <span class="api-count">${data.apiRateLimit.remaining}/${data.apiRateLimit.limit}</span> 次 (<span class="api-reset">重置时间: ${resetTime}</span>)`;
+              apiRateLimitInfo.innerHTML = 'GitHub API 速率: <span class="api-count">' + data.apiRateLimit.remaining + '/' + data.apiRateLimit.limit + '</span> 次 (<span class="api-reset">重置时间: ' + resetTime + '</span>)';
             }
           }
           
@@ -1962,7 +1962,7 @@ export default {
     let tableRows = "";
     
     if (this.syncedRepos.length === 0) {
-      tableRows = `<tr><td colspan="6" style="text-align: center">暂无同步数据</td></tr>`;
+      tableRows = '<tr><td colspan="6" style="text-align: center">暂无同步数据</td></tr>';
     } else {
       for (const repo of this.syncedRepos) {
         let statusClass = "";
@@ -2008,31 +2008,30 @@ export default {
         
         const repoId = repo.repo.replace(/\//g, '-');
         
-        tableRows += `
-          <tr id="repo-${repoId}">
-            <td>${repo.repo}</td>
-            <td>${repo.version}</td>
-            <td>${dateStr}</td>
-            <td>${repo.path || "/"}</td>
-            <td><span class="status ${statusClass}" title="${repo.message || ''}">${statusText}</span></td>
-            <td>
-              <button id="sync-${repoId}" class="btn btn-sm" onclick="triggerSyncRepo('${repo.repo}')">同步</button>
-            </td>
-          </tr>
-        `;
+        tableRows += 
+          '<tr id="repo-' + repoId + '">' +
+            '<td>' + repo.repo + '</td>' +
+            '<td>' + repo.version + '</td>' +
+            '<td>' + dateStr + '</td>' +
+            '<td>' + (repo.path || "/") + '</td>' +
+            '<td><span class="status ' + statusClass + '" title="' + (repo.message || '') + '">' + statusText + '</span></td>' +
+            '<td>' +
+              '<button id="sync-' + repoId + '" class="btn btn-sm" onclick="triggerSyncRepo(\'' + repo.repo + '\')">同步</button>' +
+            '</td>' +
+          '</tr>';
       }
     }
     
     // 添加错误信息
     let errorMessageHtml = '';
     if (this.errorMessage) {
-      errorMessageHtml = `<div class="error-message">${this.errorMessage}</div>`;
+      errorMessageHtml = '<div class="error-message">' + this.errorMessage + '</div>';
     }
     
     // 添加信息消息
     let infoMessageHtml = '';
     if (this.infoMessage) {
-      infoMessageHtml = `<div class="info-message">${this.infoMessage}</div>`;
+      infoMessageHtml = '<div class="info-message">' + this.infoMessage + '</div>';
     }
     
     // 添加 API 速率限制信息
@@ -2055,10 +2054,10 @@ export default {
           timeZone: 'Asia/Shanghai'
         });
         
-        apiRateLimitInfo = `GitHub API 速率: <span class="api-count">${this.apiRateLimit.remaining}/${this.apiRateLimit.limit}</span> 次 (<span class="api-reset">重置时间: ${resetTime}</span>)`;
+        apiRateLimitInfo = 'GitHub API 速率: <span class="api-count">' + this.apiRateLimit.remaining + '/' + this.apiRateLimit.limit + '</span> 次 (<span class="api-reset">重置时间: ' + resetTime + '</span>)';
       } catch (e) {
         console.error("API速率时间格式化错误:", e, this.apiRateLimit);
-        apiRateLimitInfo = `GitHub API 速率: <span class="api-count">${this.apiRateLimit.remaining}/${this.apiRateLimit.limit}</span> 次 (重置时间: 格式化错误)`;
+        apiRateLimitInfo = 'GitHub API 速率: <span class="api-count">' + this.apiRateLimit.remaining + '/' + this.apiRateLimit.limit + '</span> 次 (重置时间: 格式化错误)';
       }
     }
     
@@ -2152,24 +2151,19 @@ export default {
         let timeStr = '';
         try {
           timeStr = new Date(record.time).toLocaleString('zh-CN', {
-            year: 'numeric',
-            month: 'numeric',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-            hour12: false,
-            timeZone: 'Asia/Shanghai'
+            year: 'numeric', month: 'numeric', day: 'numeric',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+            hour12: false
           });
         } catch (e) {
           timeStr = record.time;
         }
         
-        cronHistoryHtml += `<tr>
-          <td>${timeStr}</td>
-          <td>${status}</td>
-          <td>${details}</td>
-        </tr>`;
+        cronHistoryHtml += '<tr>' +
+          '<td>' + timeStr + '</td>' +
+          '<td>' + status + '</td>' +
+          '<td>' + details + '</td>' +
+        '</tr>';
       }
       
       cronHistoryHtml += '</tbody></table></div>';
@@ -2187,11 +2181,10 @@ export default {
     
     // 如果正在同步，添加额外的脚本使同步状态可见
     if (this.isSyncing) {
-      html = html.replace('</script>', `
-        document.addEventListener('DOMContentLoaded', function() {
-          document.getElementById('syncAllButton').disabled = true;
-        });
-      </script>`);
+      html = html.replace('</script>', 
+        'document.addEventListener("DOMContentLoaded", function() {' +
+        'document.getElementById("syncAllButton").disabled = true;' +
+        '});</script>');
     }
     
     return new Response(html, {

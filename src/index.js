@@ -197,10 +197,8 @@ const HTML_TEMPLATE = `
     .footer {
       text-align: center;
       margin-top: 30px;
-      padding: 0 20px;
-      background-color: #f8fafc;
+      padding: 15px 20px;
       border-radius: 8px;
-      padding: 15px;
     }
     .footer-content {
       display: flex;
@@ -212,13 +210,12 @@ const HTML_TEMPLATE = `
       font-size: 0.9rem;
       color: #666;
       text-align: left;
+      cursor: pointer;
     }
     .api-info {
       font-size: 0.9rem;
       color: #666;
       text-align: right;
-      width: auto;
-      display: inline-block;
     }
     @media (max-width: 768px) {
       .footer-content {
@@ -299,20 +296,13 @@ const HTML_TEMPLATE = `
       border-bottom: none;
     }
     .check-times {
-      display: flex;
-      justify-content: space-between;
-      margin-bottom: 10px;
+      display: none;
     }
     .check-time-item {
-      background-color: #f0f9ff;
-      padding: 8px 15px;
-      border-radius: 4px;
-      font-size: 0.9rem;
-      color: #0369a1;
+      display: none;
     }
     .check-time-label {
-      font-weight: 600;
-      margin-right: 5px;
+      display: none;
     }
   </style>
 </head>
@@ -358,16 +348,7 @@ const HTML_TEMPLATE = `
   
   <div class="footer">
     <div class="footer-content">
-      <div class="check-times">
-        <div class="check-time-item">
-          <span class="check-time-label">最后检查时间:</span>
-          <span id="lastCheckInfo">{{LAST_CHECK_TIME}}</span>
-        </div>
-        <div class="check-time-item">
-          <span class="check-time-label">下次检查时间:</span>
-          <span id="nextCheckInfo">{{NEXT_CHECK_TIME}}</span>
-        </div>
-      </div>
+      <div class="last-check" id="lastCheckInfo" style="cursor: pointer;" onclick="toggleCheckTimeDisplay()">最后检查时间: {{LAST_CHECK_TIME}}</div>
       <div class="api-info">{{API_RATE_LIMIT}}</div>
     </div>
   </div>
@@ -1005,11 +986,12 @@ export default {
           repos: this.syncedRepos,
           lastCheck: lastCheckTime ? new Date(lastCheckTime * 1000).toISOString() : null,
           lastManualCheck: lastManualCheckTime ? new Date(lastManualCheckTime * 1000).toISOString() : null,
+          nextCheckTime: this.nextCheckTime,
           apiRateLimit: this.apiRateLimit,
           error: this.errorMessage,
           info: this.infoMessage,
           isSyncing: this.isSyncing,
-          cronHistory: cronTriggerHistory // 添加cron触发历史
+          cronHistory: cronTriggerHistory
         }), {
           headers: { "Content-Type": "application/json" },
           status: 200
@@ -2104,18 +2086,10 @@ export default {
       try {
         const checkInterval = parseInt(this.env?.CHECK_INTERVAL || DEFAULT_CHECK_INTERVAL);
         const nextCheckTimestamp = lastCheckTime + checkInterval;
-        nextCheckTimeStr = new Date(nextCheckTimestamp * 1000).toLocaleString('zh-CN', {
-          year: 'numeric',
-          month: 'numeric',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: false,
-          timeZone: 'Asia/Shanghai'
-        });
+        // 不显示在页面上，但是保存以供API使用
+        this.nextCheckTime = nextCheckTimestamp;
       } catch (e) {
-        console.error("下次检查时间格式化错误:", e);
+        console.error("下次检查时间计算错误:", e);
       }
     }
     
@@ -2175,7 +2149,6 @@ export default {
       .replace("{{INFO_MESSAGE}}", infoMessageHtml)
       .replace("{{TABLE_ROWS}}", tableRows)
       .replace("{{LAST_CHECK_TIME}}", lastCheckTimeStr)
-      .replace("{{NEXT_CHECK_TIME}}", nextCheckTimeStr)
       .replace("{{API_RATE_LIMIT}}", apiRateLimitInfo)
       .replace("{{CRON_HISTORY}}", cronHistoryHtml);
     

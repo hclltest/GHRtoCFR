@@ -17,7 +17,7 @@ id = "72b00ea89e6d4f79ba73fc8510017848" # 替换为您创建的KV命名空间ID
 # 添加你想要监控仓库，格式为 REPO_x = "github用户名/github仓库:/R2存储桶路径"
 REPO_1 = "2dust/v2rayN:/z_最好会点小魔法"
 REPO_2 = "2dust/v2rayNG:/z_最好会点小魔法"
-# CHECK_INTERVAL = 604800 # 单位为秒，默认7天，决定是否执行同步
+CHECK_INTERVAL = 86400 # 单位为秒，1天，决定是否执行同步
 
 [observability.logs]
 enabled = true

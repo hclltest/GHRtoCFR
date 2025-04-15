@@ -6,10 +6,12 @@
 let lastCheckTime = 0;
 let lastManualCheckTime = 0;
 let showNextCheckTime = false;
+let cronTriggerHistory = []; // 新增：存储cron触发历史
 
 // KV存储键名常量
 const KV_KEY_AUTO_CHECK_TIME = "system:lastCheckTime";
 const KV_KEY_MANUAL_CHECK_TIME = "system:lastManualCheckTime";
+const KV_KEY_CRON_HISTORY = "system:cronHistory"; // 新增：存储cron触发历史的键名
 
 // 默认检查间隔（7天，单位：秒）
 const DEFAULT_CHECK_INTERVAL = 604800;
@@ -195,10 +197,8 @@ const HTML_TEMPLATE = `
     .footer {
       text-align: center;
       margin-top: 30px;
-      padding: 0 20px;
-      background-color: #f8fafc;
+      padding: 15px 20px;
       border-radius: 8px;
-      padding: 15px;
     }
     .footer-content {
       display: flex;
@@ -210,13 +210,12 @@ const HTML_TEMPLATE = `
       font-size: 0.9rem;
       color: #666;
       text-align: left;
+      cursor: pointer;
     }
     .api-info {
       font-size: 0.9rem;
       color: #666;
       text-align: right;
-      width: auto;
-      display: inline-block;
     }
     @media (max-width: 768px) {
       .footer-content {
@@ -259,6 +258,51 @@ const HTML_TEMPLATE = `
         display: block;
         overflow-x: auto;
       }
+    }
+    .api-info {
+      font-size: 0.9rem;
+      color: #666;
+      text-align: right;
+    }
+    .cron-history-container {
+      margin: 30px 0;
+      background-color: #f8fafc;
+      border-radius: 8px;
+      padding: 20px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+    .cron-history-container h3 {
+      margin-top: 0;
+      color: #2563eb;
+      margin-bottom: 15px;
+    }
+    .cron-history-table {
+      width: 100%;
+      border-collapse: collapse;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+    .cron-history-table th {
+      background-color: #dbeafe;
+      color: #1e40af;
+      font-weight: 600;
+      text-align: left;
+      padding: 10px;
+    }
+    .cron-history-table td {
+      padding: 8px 10px;
+      border-bottom: 1px solid #e5e7eb;
+    }
+    .cron-history-table tr:last-child td {
+      border-bottom: none;
+    }
+    .check-times {
+      display: none;
+    }
+    .check-time-item {
+      display: none;
+    }
+    .check-time-label {
+      display: none;
     }
   </style>
 </head>
@@ -309,7 +353,37 @@ const HTML_TEMPLATE = `
     </div>
   </div>
   
+  {{CRON_HISTORY}}
+  
   <script>
+    // 获取状态文本
+    function getStatusText(status) {
+      if (status === "error") {
+        return "失败";
+      } else if (status === "updated" || status === "latest" || status === "synced") {
+        return "最新";
+      } else if (status === "pending") {
+        return "待同步";
+      } else if (status === "syncing") {
+        return "同步中";
+      } else {
+        return status || "未知";
+      }
+    }
+    
+    // 获取状态类
+    function getStatusClass(status) {
+      if (status === "error") {
+        return "status-error";
+      } else if (status === "updated" || status === "latest" || status === "synced") {
+        return "status-success";
+      } else if (status === "pending" || status === "syncing") {
+        return "status-pending";
+      } else {
+        return "status-pending";
+      }
+    }
+    
     function triggerSyncAll() {
       const syncAllButton = document.getElementById('syncAllButton');
       const syncLog = document.getElementById('syncLog');
@@ -491,59 +565,182 @@ const HTML_TEMPLATE = `
                 // 更新状态
                 const statusCell = row.cells[4].querySelector('.status');
                 if (statusCell) {
-                  // 移除旧的状态类
-                  statusCell.classList.remove('status-success', 'status-pending', 'status-error');
-                  
-                  // 添加新的状态类和文本
-                  let statusClass = "";
-                  let statusText = "";
-                  
-                  if (repo.status === "error") {
-                    statusClass = "status-error";
-                    statusText = "失败";
-                  } else if (repo.status === "updated" || repo.status === "latest" || repo.status === "synced") {
-                    statusClass = "status-success";
-                    statusText = "最新";
-                  } else if (repo.status === "pending") {
-                    statusClass = "status-pending";
-                    statusText = "待同步";
-                  } else if (repo.status === "syncing") {
-                    statusClass = "status-pending";
-                    statusText = "同步中";
-                  } else {
-                    statusClass = "status-pending";
-                    statusText = repo.status || "未知";
-                  }
-                  
-                  statusCell.classList.add(statusClass);
-                  statusCell.textContent = statusText;
-                  
+                  statusCell.textContent = getStatusText(repo.status);
+                  statusCell.className = 'status ' + getStatusClass(repo.status);
                   if (repo.message) {
                     statusCell.title = repo.message;
                   }
                 }
                 
-                // 更新同步按钮状态
+                // 启用同步按钮
                 const syncButton = document.getElementById('sync-' + repoId);
-                
-                if (syncButton && repo.status !== "syncing") {
+                if (syncButton) {
                   syncButton.disabled = false;
                 }
               }
             });
           }
           
-          // 更新全局同步状态
-          if (!data.isSyncing) {
-            syncAllButton.disabled = false;
+          // 更新最后检查时间
+          if (data.lastCheck || data.lastManualCheck) {
+            // 优先显示手动检查时间
+            const timestamp = data.lastManualCheck || data.lastCheck;
+            
+            try {
+              const date = new Date(timestamp);
+              const lastCheckInfo = document.getElementById('lastCheckInfo');
+              if (lastCheckInfo) {
+                // 根据存储的状态决定显示最后检查时间还是下次检查时间
+                const showNext = localStorage.getItem('showNextCheckTime') === 'true';
+                
+                if (showNext && data.nextCheckTime) {
+                  const nextDate = new Date(data.nextCheckTime * 1000);
+                  lastCheckInfo.innerHTML = '下次检查时间: ' + nextDate.toLocaleString('zh-CN', {
+                    year: 'numeric', month: 'numeric', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    hour12: false
+                  });
+                } else {
+                  lastCheckInfo.innerHTML = '最后检查时间: ' + date.toLocaleString('zh-CN', {
+                    year: 'numeric', month: 'numeric', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    hour12: false
+                  });
+                }
+              }
+            } catch (e) {
+              const lastCheckInfo = document.getElementById('lastCheckInfo');
+              if (lastCheckInfo) {
+                lastCheckInfo.innerHTML = '最后检查时间: ' + timestamp;
+              }
+            }
           }
           
-          // 添加更新成功日志
-          syncLog.innerHTML += '\\n[' + new Date().toLocaleTimeString() + '] 已刷新仓库状态\\n';
+          // 删除更新下次检查时间的部分，因为nextCheckInfo元素已不存在
+          
+          // 支持添加cron历史记录显示，如果页面需要动态更新
+          if (data.cronHistory && data.cronHistory.length > 0) {
+            const container = document.querySelector('.cron-history-container');
+            
+            // 如果已有容器，则更新内容，否则需要刷新整个页面
+            if (container) {
+              let tableHtml = '<h3>定时任务触发历史</h3><table class="cron-history-table"><thead><tr><th>触发时间</th><th>状态</th><th>详情</th></tr></thead><tbody>';
+              
+              for (const record of [...data.cronHistory].reverse()) {
+                let status = '已触发';
+                let details = '';
+                
+                if (record.syncStarted) {
+                  status = record.syncCompleted ? '同步完成' : '同步开始';
+                }
+                
+                if (record.skipped) {
+                  status = '已跳过';
+                  details = record.skipReason || '';
+                }
+                
+                if (record.syncError) {
+                  status = '同步失败';
+                  details = record.syncError;
+                }
+                
+                if (record.error) {
+                  status = '触发错误';
+                  details = record.error;
+                }
+                
+                // 格式化时间
+                let timeStr = '';
+                try {
+                  timeStr = new Date(record.time).toLocaleString('zh-CN', {
+                    year: 'numeric', month: 'numeric', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit',
+                    hour12: false
+                  });
+                } catch (e) {
+                  timeStr = record.time;
+                }
+                
+                tableHtml += '<tr>' +
+                  '<td>' + timeStr + '</td>' +
+                  '<td>' + status + '</td>' +
+                  '<td>' + details + '</td>' +
+                '</tr>';
+              }
+              
+              tableHtml += '</tbody></table>';
+              container.innerHTML = tableHtml;
+            }
+          }
+          
+          // 更新GitHub API速率限制信息
+          if (data.apiRateLimit) {
+            const resetTime = new Date(data.apiRateLimit.reset * 1000).toLocaleString('zh-CN', {
+              year: 'numeric', month: 'numeric', day: 'numeric',
+              hour: '2-digit', minute: '2-digit', second: '2-digit',
+              hour12: false
+            });
+            
+            const apiRateLimitInfo = document.querySelector('.api-info');
+            if (apiRateLimitInfo) {
+              apiRateLimitInfo.innerHTML = 'GitHub API 速率: <span class="api-count">' + data.apiRateLimit.remaining + '/' + data.apiRateLimit.limit + '</span> 次 (<span class="api-reset">重置时间: ' + resetTime + '</span>)';
+            }
+          }
+          
+          // 启用同步所有按钮
+          syncAllButton.disabled = data.isSyncing;
+          
+          // 添加或更新错误消息
+          if (data.error) {
+            // 检查是否已存在错误消息区域
+            let errorMessage = document.querySelector('.error-message');
+            if (!errorMessage) {
+              // 创建新的错误消息区域
+              errorMessage = document.createElement('div');
+              errorMessage.className = 'error-message';
+              // 插入到表格之前
+              const table = document.querySelector('table');
+              table.parentNode.insertBefore(errorMessage, table);
+            }
+            errorMessage.textContent = data.error;
+          } else {
+            // 移除已存在的错误消息区域
+            const errorMessage = document.querySelector('.error-message');
+            if (errorMessage) {
+              errorMessage.remove();
+            }
+          }
+          
+          // 添加或更新信息消息
+          if (data.info) {
+            // 检查是否已存在信息消息区域
+            let infoMessage = document.querySelector('.info-message');
+            if (!infoMessage) {
+              // 创建新的信息消息区域
+              infoMessage = document.createElement('div');
+              infoMessage.className = 'info-message';
+              // 插入到表格之前
+              const table = document.querySelector('table');
+              table.parentNode.insertBefore(infoMessage, table);
+            }
+            infoMessage.textContent = data.info;
+          } else {
+            // 移除已存在的信息消息区域
+            const infoMessage = document.querySelector('.info-message');
+            if (infoMessage) {
+              infoMessage.remove();
+            }
+          }
+          
+          if (syncLog.innerHTML === '') {
+            syncLog.innerHTML = '状态已刷新。\\n';
+          } else {
+            syncLog.innerHTML += '状态已刷新。\\n';
+          }
           syncLog.scrollTop = syncLog.scrollHeight;
         })
         .catch(error => {
-          syncLog.innerHTML += '\\n刷新状态失败: ' + error.message + '\\n';
+          syncLog.innerHTML += '获取状态失败: ' + error.message + '\\n';
           syncLog.scrollTop = syncLog.scrollHeight;
         });
     }
@@ -793,10 +990,12 @@ export default {
           repos: this.syncedRepos,
           lastCheck: lastCheckTime ? new Date(lastCheckTime * 1000).toISOString() : null,
           lastManualCheck: lastManualCheckTime ? new Date(lastManualCheckTime * 1000).toISOString() : null,
+          nextCheckTime: this.nextCheckTime,
           apiRateLimit: this.apiRateLimit,
           error: this.errorMessage,
           info: this.infoMessage,
-          isSyncing: this.isSyncing
+          isSyncing: this.isSyncing,
+          cronHistory: cronTriggerHistory
         }), {
           headers: { "Content-Type": "application/json" },
           status: 200
@@ -843,6 +1042,15 @@ export default {
         lastManualCheckTime = parseInt(manualTimeStr);
         console.log(`从KV加载手动检查时间: ${new Date(lastManualCheckTime * 1000).toISOString()}`);
       }
+      
+      // 加载cron触发历史
+      const cronHistoryStr = await env.SYNC_STATUS.get(KV_KEY_CRON_HISTORY);
+      if (cronHistoryStr) {
+        cronTriggerHistory = JSON.parse(cronHistoryStr);
+        console.log(`从KV加载cron触发历史: ${cronHistoryStr}`);
+      } else {
+        cronTriggerHistory = [];
+      }
     } catch (error) {
       console.error("加载检查时间出错:", error);
     }
@@ -853,6 +1061,31 @@ export default {
    */
   async scheduled(event, env, ctx) {
     try {
+      // 记录本次触发时间
+      const triggerTime = new Date();
+      console.log(`定时任务触发: ${triggerTime.toISOString()}`);
+      
+      // 更新cron触发历史
+      cronTriggerHistory.push({
+        time: triggerTime.toISOString(),
+        triggered: true
+      });
+      
+      // 只保留最近10条记录
+      if (cronTriggerHistory.length > 10) {
+        cronTriggerHistory = cronTriggerHistory.slice(cronTriggerHistory.length - 10);
+      }
+      
+      // 保存cron触发历史到KV
+      if (env.SYNC_STATUS) {
+        try {
+          await env.SYNC_STATUS.put(KV_KEY_CRON_HISTORY, JSON.stringify(cronTriggerHistory));
+          console.log(`已更新cron触发历史，共${cronTriggerHistory.length}条记录`);
+        } catch (error) {
+          console.error("保存cron触发历史失败:", error);
+        }
+      }
+      
       // 首先从KV加载检查时间
       await this.loadCheckTimes(env);
       
@@ -870,33 +1103,67 @@ export default {
       
       const now = Math.floor(Date.now() / 1000);
       const checkInterval = parseInt(env.CHECK_INTERVAL || DEFAULT_CHECK_INTERVAL);
+      console.log(`当前时间: ${new Date(now * 1000).toISOString()}`);
+      console.log(`上次检查时间: ${new Date(lastCheckTime * 1000).toISOString()}`);
+      console.log(`检查间隔: ${checkInterval}秒 (${checkInterval/86400}天)`);
+      console.log(`自上次检查已过: ${now - lastCheckTime}秒 (${(now - lastCheckTime)/86400}天)`);
+      
+      // 记录同步条件判断
+      let shouldSync = lastCheckTime === 0 || now - lastCheckTime >= checkInterval;
+      console.log(`是否需要同步: ${shouldSync ? "是" : "否"} (lastCheckTime === 0: ${lastCheckTime === 0}, now - lastCheckTime >= checkInterval: ${now - lastCheckTime >= checkInterval})`);
       
       // 检查是否到达检查间隔，或者是按照cron定时首次执行
-      if (lastCheckTime === 0 || now - lastCheckTime >= checkInterval) {
+      if (shouldSync) {
+        console.log(`条件满足，开始执行同步任务...`);
         this.isSyncing = true;
+        
+        // 记录到cron历史
+        cronTriggerHistory[cronTriggerHistory.length - 1].syncStarted = true;
+        await env.SYNC_STATUS.put(KV_KEY_CRON_HISTORY, JSON.stringify(cronTriggerHistory));
+        
         try {
           // 创建一个伪请求对象以复用handleSync方法
           const mockRequest = new Request('https://example.com/sync');
           await this.handleSync(mockRequest, env, ctx);
           lastCheckTime = now; // 更新自动检查时间
           
+          // 记录到cron历史
+          cronTriggerHistory[cronTriggerHistory.length - 1].syncCompleted = true;
+          
           // 保存到KV
           if (env.SYNC_STATUS) {
             try {
               await env.SYNC_STATUS.put(KV_KEY_AUTO_CHECK_TIME, lastCheckTime.toString());
               console.log(`已更新自动检查时间: ${new Date(lastCheckTime * 1000).toISOString()}`);
+              await env.SYNC_STATUS.put(KV_KEY_CRON_HISTORY, JSON.stringify(cronTriggerHistory));
             } catch (error) {
               console.error("保存自动检查时间失败:", error);
             }
           }
+        } catch (error) {
+          console.error("同步任务执行出错:", error);
+          // 记录到cron历史
+          cronTriggerHistory[cronTriggerHistory.length - 1].syncError = error.message;
+          await env.SYNC_STATUS.put(KV_KEY_CRON_HISTORY, JSON.stringify(cronTriggerHistory));
         } finally {
           this.isSyncing = false;
         }
       } else {
         console.log(`距离上次检查只过了 ${now - lastCheckTime} 秒，不到设定的 ${checkInterval} 秒，跳过本次触发`);
+        // 记录到cron历史
+        cronTriggerHistory[cronTriggerHistory.length - 1].skipped = true;
+        cronTriggerHistory[cronTriggerHistory.length - 1].skipReason = `距离上次检查只过了 ${now - lastCheckTime} 秒，不到设定的 ${checkInterval} 秒`;
+        await env.SYNC_STATUS.put(KV_KEY_CRON_HISTORY, JSON.stringify(cronTriggerHistory));
       }
     } catch (error) {
       console.error("定时任务执行出错:", error);
+      // 记录到cron历史
+      if (cronTriggerHistory.length > 0) {
+        cronTriggerHistory[cronTriggerHistory.length - 1].error = error.message;
+        if (env.SYNC_STATUS) {
+          await env.SYNC_STATUS.put(KV_KEY_CRON_HISTORY, JSON.stringify(cronTriggerHistory));
+        }
+      }
       this.isSyncing = false;
     }
   },
@@ -1681,7 +1948,7 @@ export default {
     let tableRows = "";
     
     if (this.syncedRepos.length === 0) {
-      tableRows = `<tr><td colspan="6" style="text-align: center">暂无同步数据</td></tr>`;
+      tableRows = '<tr><td colspan="6" style="text-align: center">暂无同步数据</td></tr>';
     } else {
       for (const repo of this.syncedRepos) {
         let statusClass = "";
@@ -1727,31 +1994,30 @@ export default {
         
         const repoId = repo.repo.replace(/\//g, '-');
         
-        tableRows += `
-          <tr id="repo-${repoId}">
-            <td>${repo.repo}</td>
-            <td>${repo.version}</td>
-            <td>${dateStr}</td>
-            <td>${repo.path || "/"}</td>
-            <td><span class="status ${statusClass}" title="${repo.message || ''}">${statusText}</span></td>
-            <td>
-              <button id="sync-${repoId}" class="btn btn-sm" onclick="triggerSyncRepo('${repo.repo}')">同步</button>
-            </td>
-          </tr>
-        `;
+        tableRows += 
+          '<tr id="repo-' + repoId + '">' +
+            '<td>' + repo.repo + '</td>' +
+            '<td>' + repo.version + '</td>' +
+            '<td>' + dateStr + '</td>' +
+            '<td>' + (repo.path || "/") + '</td>' +
+            '<td><span class="status ' + statusClass + '" title="' + (repo.message || '') + '">' + statusText + '</span></td>' +
+            '<td>' +
+              '<button id="sync-' + repoId + '" class="btn btn-sm" onclick="triggerSyncRepo(\'' + repo.repo + '\')">同步</button>' +
+            '</td>' +
+          '</tr>';
       }
     }
     
     // 添加错误信息
     let errorMessageHtml = '';
     if (this.errorMessage) {
-      errorMessageHtml = `<div class="error-message">${this.errorMessage}</div>`;
+      errorMessageHtml = '<div class="error-message">' + this.errorMessage + '</div>';
     }
     
     // 添加信息消息
     let infoMessageHtml = '';
     if (this.infoMessage) {
-      infoMessageHtml = `<div class="info-message">${this.infoMessage}</div>`;
+      infoMessageHtml = '<div class="info-message">' + this.infoMessage + '</div>';
     }
     
     // 添加 API 速率限制信息
@@ -1774,10 +2040,10 @@ export default {
           timeZone: 'Asia/Shanghai'
         });
         
-        apiRateLimitInfo = `GitHub API 速率: <span class="api-count">${this.apiRateLimit.remaining}/${this.apiRateLimit.limit}</span> 次 (<span class="api-reset">重置时间: ${resetTime}</span>)`;
+        apiRateLimitInfo = 'GitHub API 速率: <span class="api-count">' + this.apiRateLimit.remaining + '/' + this.apiRateLimit.limit + '</span> 次 (<span class="api-reset">重置时间: ' + resetTime + '</span>)';
       } catch (e) {
         console.error("API速率时间格式化错误:", e, this.apiRateLimit);
-        apiRateLimitInfo = `GitHub API 速率: <span class="api-count">${this.apiRateLimit.remaining}/${this.apiRateLimit.limit}</span> 次 (重置时间: 格式化错误)`;
+        apiRateLimitInfo = 'GitHub API 速率: <span class="api-count">' + this.apiRateLimit.remaining + '/' + this.apiRateLimit.limit + '</span> 次 (重置时间: 格式化错误)';
       }
     }
     
@@ -1818,21 +2084,84 @@ export default {
       }
     }
     
+    // 处理下次检查时间
+    let nextCheckTimeStr = "未设置";
+    if (lastCheckTime) {
+      try {
+        const checkInterval = parseInt(this.env?.CHECK_INTERVAL || DEFAULT_CHECK_INTERVAL);
+        const nextCheckTimestamp = lastCheckTime + checkInterval;
+        // 不显示在页面上，但是保存以供API使用
+        this.nextCheckTime = nextCheckTimestamp;
+      } catch (e) {
+        console.error("下次检查时间计算错误:", e);
+      }
+    }
+    
+    // 生成cron触发历史HTML
+    let cronHistoryHtml = '';
+    if (cronTriggerHistory && cronTriggerHistory.length > 0) {
+      cronHistoryHtml = '<div class="cron-history-container"><h3>定时任务触发历史</h3><table class="cron-history-table"><thead><tr><th>触发时间</th><th>状态</th><th>详情</th></tr></thead><tbody>';
+      
+      for (const record of cronTriggerHistory.slice().reverse()) { // 最新的记录显示在前面
+        let status = '已触发';
+        let details = '';
+        
+        if (record.syncStarted) {
+          status = record.syncCompleted ? '同步完成' : '同步开始';
+        }
+        
+        if (record.skipped) {
+          status = '已跳过';
+          details = record.skipReason || '';
+        }
+        
+        if (record.syncError) {
+          status = '同步失败';
+          details = record.syncError;
+        }
+        
+        if (record.error) {
+          status = '触发错误';
+          details = record.error;
+        }
+        
+        // 格式化时间
+        let timeStr = '';
+        try {
+          timeStr = new Date(record.time).toLocaleString('zh-CN', {
+            year: 'numeric', month: 'numeric', day: 'numeric',
+            hour: '2-digit', minute: '2-digit', second: '2-digit',
+            hour12: false
+          });
+        } catch (e) {
+          timeStr = record.time;
+        }
+        
+        cronHistoryHtml += '<tr>' +
+          '<td>' + timeStr + '</td>' +
+          '<td>' + status + '</td>' +
+          '<td>' + details + '</td>' +
+        '</tr>';
+      }
+      
+      cronHistoryHtml += '</tbody></table></div>';
+    }
+    
     // 替换模板中的占位符
     let html = HTML_TEMPLATE
       .replace("{{ERROR_MESSAGE}}", errorMessageHtml)
       .replace("{{INFO_MESSAGE}}", infoMessageHtml)
       .replace("{{TABLE_ROWS}}", tableRows)
       .replace("{{LAST_CHECK_TIME}}", lastCheckTimeStr)
-      .replace("{{API_RATE_LIMIT}}", apiRateLimitInfo);
+      .replace("{{API_RATE_LIMIT}}", apiRateLimitInfo)
+      .replace("{{CRON_HISTORY}}", cronHistoryHtml);
     
     // 如果正在同步，添加额外的脚本使同步状态可见
     if (this.isSyncing) {
-      html = html.replace('</script>', `
-        document.addEventListener('DOMContentLoaded', function() {
-          document.getElementById('syncAllButton').disabled = true;
-        });
-      </script>`);
+      html = html.replace('</script>', 
+        'document.addEventListener("DOMContentLoaded", function() {' +
+        'document.getElementById("syncAllButton").disabled = true;' +
+        '});</script>');
     }
     
     return new Response(html, {
@@ -2078,6 +2407,9 @@ export default {
    * 处理主页请求
    */
   async handleHome(env) {
+    // 保存env引用以便其他函数使用
+    this.env = env;
+    
     // 检查 R2 绑定
     const hasR2Binding = typeof env.R2_BUCKET !== 'undefined';
     if (!hasR2Binding) {
